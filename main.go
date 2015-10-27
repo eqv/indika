@@ -18,63 +18,56 @@ var asm = strings.Join([]string{
 	"8b17",             // mov rdx, [rdi]
 }, "")
 
-func run(t *trace.Trace) error {
+type fakeDisassembler struct {}
+
+func( s* fakeDisassembler) GetBlocks(addr uint64, codepages map[uint64]([]byte)) map[trace.BlockRange]bool {
+  res := make(map[trace.BlockRange]bool)
+  for paddr, val := range codepages{
+    if paddr< addr && addr+uint64(len(val)) > paddr {
+      for byteaddr := addr; byteaddr < addr+uint64(len(val)); byteaddr += 1 {
+        res[trace.BlockRange{From: byteaddr, To:byteaddr+1}] = true
+      }
+    }
+  }
+  return res
+}
+
+func run() error {
 	code, err := hex.DecodeString(asm)
 	if err != nil {
 		return err
 	}
-	// set up unicorn instance and add hooks
-	mu, err := uc.NewUnicorn(uc.ARCH_X86, uc.MODE_64)
+
+  config := trace.Config{ 
+    MaxTraceInstructionCount: 1000, 
+    MaxTraceTime: 0, 
+    MaxTracePages: 100, 
+    Arch: uc.ARCH_X86, 
+    Mode: uc.MODE_64,
+    Disassembler: &fakeDisassembler{},
+  }
+
+  mem := make(map[uint64]([]byte))
+  mem[0x1000] = code
+  em,err := trace.NewEmulator(mem,config)
 
 	if err != nil {
 		return err
 	}
 
-	t.AddHooks(mu)
-	// map and write code to memory
-	if err := mu.MemMap(0x1000, 0x1000); err != nil {
-		return err
-	}
-	if err := mu.MemWrite(0x1000, code); err != nil {
-		return err
-	}
+  err = em.Run(0x1000)
 
-	// set example register
-	if err := mu.RegWrite(uc.X86_REG_RDX, trace.GetReg(3)); err != nil {
-		return err
-	}
-
-	rdx, err := mu.RegRead(uc.X86_REG_RDX)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("RDX old is : %d\n", rdx)
+  fmt.Println("%v", em.GetHash(80))
 
-	// start emulation
-	if err := mu.Start( 0x1000, 0x1000+uint64(len(code)) ); err != nil {
-		return err
-	}
-
-	// read back example register
-	rdx, err = mu.RegRead(uc.X86_REG_RDX)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("RDX is now: %d\n", rdx)
-	return nil
+  return nil
 }
 
 func main() {
-	code,_ := hex.DecodeString(asm)
-  
-  blocks_to_visit := make(map[trace.BlockRange]bool);
-  for i := uint64(0); i < uint64(len(code)); i++ {
-    blocks_to_visit[trace.NewBlockRange(i+0x1000,i+0x1000+1)] = true;
+  if err := run() ; err != nil {
+    fmt.Println("%v",err)
   }
-  t := trace.NewTrace(50, &blocks_to_visit);
-	if err := run(t); err != nil {
-		fmt.Println(err)
-	}
-  fmt.Println("%v", t.GetHash(80))
 }
