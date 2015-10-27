@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
-  "github.com/ranmrdrakono/function_hasher/trace"
+  "github.com/ranmrdrakono/indika/trace"
 	"strings"
 )
 
