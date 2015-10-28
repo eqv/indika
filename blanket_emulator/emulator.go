@@ -20,8 +20,8 @@ type Emulator struct {
 }
 
 type Config struct {
-	MaxTraceInstructionCount uint
-	MaxTraceTime             uint
+	MaxTraceInstructionCount uint64
+	MaxTraceTime             uint64
 	MaxTracePages            int
 	Arch                     int
 	Mode                     int
@@ -103,7 +103,8 @@ func (s *Emulator) Run(addr uint64) error {
 }
 
 func (s *Emulator) RunTrace(addr uint64) error {
-	if err := s.mu.Start(addr, s.last_block_end); err != nil {
+	opt := uc.UcOptions{Timeout: s.config.MaxTraceTime, Count: s.config.MaxTraceInstructionCount}
+	if err := s.mu.StartWithOptions(addr, s.last_block_end, &opt); err != nil {
 		return err
 	}
 	err := s.WorkingSet.Clear(s.mu)
