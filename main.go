@@ -20,9 +20,7 @@ var asm = strings.Join([]string{
 	"8b17",       // mov rdx, [rdi]
 }, "")
 
-type fakeDisassembler struct{}
-
-func (s *fakeDisassembler) GetBlocks(addr uint64, codepages map[uint64]([]byte)) map[blanket_emulator.BlockRange]bool {
+func GetBlocks(addr uint64, codepages map[uint64]([]byte)) map[blanket_emulator.BlockRange]bool {
 	res := make(map[blanket_emulator.BlockRange]bool)
 	for paddr, val := range codepages {
 		if paddr <= addr && paddr+uint64(len(val)) >= addr {
@@ -36,17 +34,19 @@ func (s *fakeDisassembler) GetBlocks(addr uint64, codepages map[uint64]([]byte))
 
 func run() error {
 	code, err := hex.DecodeString(asm)
+
 	if err != nil {
 		return err
 	}
 
+	ev := blanket_emulator.NewEventsToMinHash()
 	config := blanket_emulator.Config{
 		MaxTraceInstructionCount: 1000,
 		MaxTraceTime:             0,
 		MaxTracePages:            100,
 		Arch:                     uc.ARCH_X86,
 		Mode:                     uc.MODE_64,
-		Disassembler:             &fakeDisassembler{},
+		EventHandler:             ev,
 	}
 
 	mem := make(map[uint64]([]byte))
@@ -57,13 +57,13 @@ func run() error {
 		return err
 	}
 
-	err = em.Run(0x1000)
+	err = em.FullBlanket(GetBlocks(0x1000, mem))
 
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("%v", em.GetHash(80))
+	fmt.Println("%v", ev.GetHash(80))
 
 	return nil
 }
