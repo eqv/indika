@@ -1,9 +1,10 @@
-package main
+package blanket_emulator
 
 import (
 	"encoding/hex"
 	"fmt"
-	"github.com/ranmrdrakono/indika/blanket_emulator"
+  "testing"
+//	"github.com/ranmrdrakono/indika/blanket_emulator"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 	"strings"
 )
@@ -20,12 +21,12 @@ var asm = strings.Join([]string{
 	"8b17",       // mov rdx, [rdi]
 }, "")
 
-func GetBlocks(addr uint64, codepages map[uint64]([]byte)) map[blanket_emulator.BlockRange]bool {
-	res := make(map[blanket_emulator.BlockRange]bool)
+func GetBlocks(addr uint64, codepages map[uint64]([]byte)) map[BlockRange]bool {
+	res := make(map[BlockRange]bool)
 	for paddr, val := range codepages {
 		if paddr <= addr && paddr+uint64(len(val)) >= addr {
 			for byteaddr := addr; byteaddr < addr+uint64(len(val)); byteaddr += 1 {
-				res[blanket_emulator.BlockRange{From: byteaddr, To: byteaddr + 1}] = true
+				res[BlockRange{From: byteaddr, To: byteaddr + 1}] = true
 			}
 		}
 	}
@@ -39,8 +40,8 @@ func run() error {
 		return err
 	}
 
-	ev := blanket_emulator.NewEventsToMinHash()
-	config := blanket_emulator.Config{
+	ev := NewEventsToMinHash()
+	config := Config{
 		MaxTraceInstructionCount: 1000,
 		MaxTraceTime:             0,
 		MaxTracePages:            100,
@@ -51,7 +52,7 @@ func run() error {
 
 	mem := make(map[uint64]([]byte))
 	mem[0x1000] = code
-	em, err := blanket_emulator.NewEmulator(mem, config)
+	em, err := NewEmulator(mem, config)
 
 	if err != nil {
 		return err
@@ -68,7 +69,7 @@ func run() error {
 	return nil
 }
 
-func main() {
+func TestRun(t *testing.T) {
 	if err := run(); err != nil {
 		fmt.Println("%v", err)
 	}
