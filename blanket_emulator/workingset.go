@@ -1,10 +1,12 @@
 package blanket_emulator
 
 import (
+  "github.com/go-errors/errors"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 )
 
 const pagesize = 4096
+
 
 type WorkingSet struct {
 	mapped []uint64
@@ -20,16 +22,16 @@ func NewWorkingSet(size int) *WorkingSet {
 	return res
 }
 
-func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) error {
+func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
 	alignment := (addr % pagesize)
 	base_addr := addr - alignment
 	err := mu.MemMap(base_addr, uint64(pagesize))
 	if err != nil {
-		return err
+		return wrap(err)
 	}
 	err = mu.MemWrite(base_addr, GetMem(base_addr, pagesize))
 	if err != nil {
-		return err
+		return wrap(err)
 	}
 	s.StoreInWorkingSet(base_addr, mu)
 	if addr+size > base_addr+pagesize { //sometimes we might need to map 2 pages
@@ -38,7 +40,7 @@ func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) error {
 	return nil
 }
 
-func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) error {
+func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) *errors.Error {
 	if s.newest == -1 {
 		s.mapped[0] = addr
 		s.oldest = 0
@@ -49,7 +51,7 @@ func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) error {
 		addr_to_unmap := s.mapped[s.oldest]
 		err := mu.MemUnmap(addr_to_unmap, pagesize)
 		if err != nil {
-			return err
+			return wrap(err)
 		}
 	}
 	s.oldest = (s.oldest + 1) % len(s.mapped)
@@ -57,14 +59,14 @@ func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) error {
 	return nil
 }
 
-func (s *WorkingSet) Clear(mu uc.Unicorn) error {
+func (s *WorkingSet) Clear(mu uc.Unicorn) *errors.Error {
 	if s.newest == -1 {
 		return nil
 	}
 	for i := s.oldest; i != s.newest; i = (i + 1) % len(s.mapped) {
 		err := mu.MemUnmap(s.mapped[i], pagesize)
 		if err != nil {
-			return err
+			return wrap(err)
 		}
 	}
 	return nil

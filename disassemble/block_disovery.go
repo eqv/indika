@@ -1,22 +1,11 @@
-package main
+package disassemble
 
-import "github.com/bnagy/gapstone"
-import "fmt"
-
-type BasicBlock struct {
-	start uint64
-	end   uint64
-}
-
-var code = "\x55\x48\x89\xe5\x89\x7d\xec\x89\x75\xe8\x8b" +
-	"\x45\xe8\x01\x45\xec\xd1\x65\xe8\x8b\x55\xec" +
-	"\x8b\x45\xe8\x01\xd0\x3d\x38\x05\x00\x00\x75" +
-	"\x14\xc7\x45\xfc\x00\x00\x00\x00\xc7\x45\xec" +
-	"\x00\x00\x00\x00\x83\x45\xe8\x02\xeb\x20\xc7" +
-	"\x45\xfc\x06\x00\x00\x00\x8b\x45\xe8\x01\x45" +
-	"\xec\x8b\x55\xec\x8b\x45\xfc\x01\xd0\x85\xc0" +
-	"\x75\x07\xb8\x00\x00\x00\x00\xeb\x05\xb8\x01" +
-	"\x00\x00\x00\x5d\xc3"
+import  (
+        "fmt"
+        "github.com/bnagy/gapstone"
+	      log "github.com/Sirupsen/logrus"
+        ds "github.com/ranmrdrakono/indika/data_structures"
+        )
 
 /* jump instructions */
 var jmp_flags = make(map[uint]bool)
@@ -47,9 +36,9 @@ func init() {
 	jmp_flags[gapstone.X86_INS_LJMP] = true
 }
 
-func discover_basic_blocks(instrs []gapstone.Instruction) map[BasicBlock]bool {
+func Discover_basic_blocks(instrs []gapstone.Instruction) map[ds.Range]bool {
 	/* set of basic blocks */
-	var blocks = make(map[BasicBlock]bool)
+	var blocks = make(map[ds.Range]bool)
 
 	/* discover addresses */
 	bb_starts := search_start_addresses(instrs)
@@ -57,7 +46,7 @@ func discover_basic_blocks(instrs []gapstone.Instruction) map[BasicBlock]bool {
 
 	/* create basic block */
 	for start, end := range bb_ends {
-		bb := create_basic_block(start, end)
+		bb := ds.NewRange(start, end)
 		blocks[bb] = true
 	}
 
@@ -86,7 +75,6 @@ func search_start_addresses(instrs []gapstone.Instruction) map[uint64]bool {
 		}
 	}
 	return bb_starts
-
 }
 
 func search_end_addresses(instrs []gapstone.Instruction, bb_starts map[uint64]bool) map[uint64]uint64 {
@@ -115,44 +103,33 @@ func search_end_addresses(instrs []gapstone.Instruction, bb_starts map[uint64]bo
 	return bb_ends
 }
 
-func create_basic_block(start uint64, end uint64) BasicBlock {
-	var bb BasicBlock
-	bb.start = start
-	bb.end = end
-
-	return bb
-}
-
-func print_blocks(blocks map[BasicBlock]bool) {
+func print_blocks(blocks map[ds.Range]bool) {
 	for block, value := range blocks {
 		if value {
-			fmt.Printf("(0x%x, 0x%x)\n", block.start, block.end)
-
+			fmt.Printf("(0x%x, 0x%x)\n", block.From, block.To)
 		}
 	}
 }
 
-func main() {
-	/* init engine */
-	engine, err := gapstone.New(gapstone.CS_ARCH_X86,
-		gapstone.CS_MODE_64)
+func GetBasicBlocks(codeoffset uint64, code []byte, function_bounds ds.Range) map[ds.Range]bool{
+  EP := function_bounds.From
+	engine, err := gapstone.New(gapstone.CS_ARCH_X86, gapstone.CS_MODE_64)
 
+  if err != nil { log.WithFields(log.Fields{"error": err}).Fatal("Failed to create Gapstone Disassembler")}
+  if EP-codeoffset > uint64(len(code)) || EP < codeoffset  || function_bounds.To > codeoffset + uint64(len(code)) {
+    log.WithFields(log.Fields{"function range": function_bounds, "code offset": codeoffset, "len of code": len(code)}).Fatal("invalid offset in code")
+  }
+
+  offset_in_code := EP - codeoffset
+  code = code[offset_in_code:offset_in_code+function_bounds.Length()]
 	/* detailed options. enables parsing jump arguments*/
 	engine.SetOption(gapstone.CS_OPT_DETAIL, gapstone.CS_OPT_ON)
 
-	if err == nil {
+  defer engine.Close()
+  /* disassemble code */
+  instrs, err := engine.Disasm(code, EP, 0)
 
-		defer engine.Close()
+  if err != nil { log.WithFields(log.Fields{"error": err} ).Fatal("Failed to Disassemble")}
 
-		/* disassemble code */
-		instrs, err := engine.Disasm([]byte(code), 0x10000, 0)
-
-		/* build basic blocks */
-		if err == nil {
-			blocks := discover_basic_blocks(instrs)
-			print_blocks(blocks)
-
-			return
-		}
-	}
+  return Discover_basic_blocks(instrs)
 }
