@@ -44,7 +44,7 @@ func GetSegments(e *elf.File) map[ds.Range]*ds.MappedRegion {
 			continue
 		}
 		info := new(ds.MappedRegion)
-    info.Range = ds.NewRange(hdr.Vaddr, hdr.Vaddr+hdr.Memsz)
+		info.Range = ds.NewRange(hdr.Vaddr, hdr.Vaddr+hdr.Memsz)
 		info.Data = make([]byte, hdr.Filesz, hdr.Filesz)
 		info.Flags = elfFlagsToPageFlags(hdr.Flags)
 		res[info.Range] = info

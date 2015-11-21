@@ -1,7 +1,7 @@
 package blanket_emulator
 
 import (
-  ds "github.com/ranmrdrakono/indika/data_structures"
+	ds "github.com/ranmrdrakono/indika/data_structures"
 )
 
 type Trace struct {

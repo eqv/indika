@@ -1,9 +1,9 @@
-package disassemble 
+package disassemble
 
-import ( 
-        "github.com/bnagy/gapstone"
-        "testing"
-       )
+import (
+	"github.com/bnagy/gapstone"
+	"testing"
+)
 
 var code = "\x55\x48\x89\xe5\x89\x7d\xec\x89\x75\xe8\x8b" +
 	"\x45\xe8\x01\x45\xec\xd1\x65\xe8\x8b\x55\xec" +
@@ -14,7 +14,6 @@ var code = "\x55\x48\x89\xe5\x89\x7d\xec\x89\x75\xe8\x8b" +
 	"\xec\x8b\x55\xec\x8b\x45\xfc\x01\xd0\x85\xc0" +
 	"\x75\x07\xb8\x00\x00\x00\x00\xeb\x05\xb8\x01" +
 	"\x00\x00\x00\x5d\xc3"
-
 
 func TestRun(t *testing.T) {
 	/* init engine */
@@ -40,3 +39,5 @@ func TestRun(t *testing.T) {
 		}
 	}
 }
+
+//O0 strings str_reverse  [[4195646,4195664],[4195669,4195678],[4195680,4195681],[4195607,4195626],[4195631,4195644]].map{|x| x.map{|y| y.to_s 16 }}

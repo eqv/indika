@@ -1,8 +1,8 @@
 package data_structures
 
 import (
-	      log "github.com/Sirupsen/logrus"
-      )
+	log "github.com/Sirupsen/logrus"
+)
 
 type Range struct {
 	From, To uint64
@@ -35,17 +35,16 @@ func (s *Range) IntersectsRange(other Range) bool {
 	return lower <= upper
 }
 
-
-func (s *Range) Length() uint64{
-  return s.To-s.From
+func (s *Range) Length() uint64 {
+	return s.To - s.From
 }
 
 func NewRange(from, to uint64) Range {
-  if from > to {
-    log.WithFields(log.Fields{"from": from, "to": to}).Warning("Range with swaped bounds")
-    tmp := to
-    to = from
-    from = tmp
-  }
+	if from > to {
+		log.WithFields(log.Fields{"from": from, "to": to}).Warning("Range with swaped bounds")
+		tmp := to
+		to = from
+		from = tmp
+	}
 	return Range{From: from, To: to}
 }

@@ -1,15 +1,15 @@
 package data_structures
 
-type PageFlags uint;
+type PageFlags uint
 
 const (
-  X PageFlags = 1
-  R PageFlags = 2
-  W PageFlags = 4
+	X PageFlags = 1
+	R PageFlags = 2
+	W PageFlags = 4
 )
 
-type MappedRegion struct{
-  Data []byte
-  Flags PageFlags
-  Range Range
+type MappedRegion struct {
+	Data  []byte
+	Flags PageFlags
+	Range Range
 }

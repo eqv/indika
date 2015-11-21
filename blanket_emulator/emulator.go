@@ -1,10 +1,10 @@
 package blanket_emulator
 
 import (
-  "github.com/go-errors/errors"
 	log "github.com/Sirupsen/logrus"
+	"github.com/go-errors/errors"
+	ds "github.com/ranmrdrakono/indika/data_structures"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
-  ds "github.com/ranmrdrakono/indika/data_structures"
 )
 
 type EventHandler interface {
@@ -31,49 +31,50 @@ type Config struct {
 	EventHandler             EventHandler
 }
 
-func wrap(err error) *errors.Error{
-  if err != nil {
-    return errors.Wrap(err,1)
-  }
-  return nil
+func wrap(err error) *errors.Error {
+	if err != nil {
+		return errors.Wrap(err, 1)
+	}
+	return nil
 }
 
-func check(err *errors.Error){
-  if(err!=nil && err.Err != nil) { log.WithFields(log.Fields{"error": err, "stack": err.ErrorStack()}).Fatal("Error creating Elf Parser")}
+func check(err *errors.Error) {
+	if err != nil && err.Err != nil {
+		log.WithFields(log.Fields{"error": err, "stack": err.ErrorStack()}).Fatal("Error creating Elf Parser")
+	}
 }
-
 
 func NewEmulator(codepages map[uint64]([]byte), conf Config) (*Emulator, *errors.Error) {
 	res := new(Emulator)
 	res.Config = conf
 	res.codepages = codepages
 	res.WorkingSet = NewWorkingSet(conf.MaxTracePages)
-	mu, err2 := uc.NewUnicorn(conf.Arch, conf.Mode) 
+	mu, err2 := uc.NewUnicorn(conf.Arch, conf.Mode)
 	if err2 != nil {
-		return nil, errors.Wrap(err2,0)
+		return nil, errors.Wrap(err2, 0)
 	}
 	res.mu = mu
-  err := res.addHooks()
+	err := res.addHooks()
 	if err != nil {
-		return nil,errors.Wrap(err,0) 
+		return nil, errors.Wrap(err, 0)
 	}
 	if err = res.WriteMemory(codepages); err != nil {
-		return nil,errors.Wrap(err,0) 
+		return nil, errors.Wrap(err, 0)
 	}
 	if err = res.ResetRegisters(); err != nil {
-		return nil,errors.Wrap(err,0) 
+		return nil, errors.Wrap(err, 0)
 	}
 
 	return res, nil
 }
 
-func check_consistency(codepages map[uint64]([]byte)){
+func check_consistency(codepages map[uint64]([]byte)) {
 	for addr, _ := range codepages {
-    if addr % pagesize != 0 {
-      err := errors.Errorf("broken alignment")
-      log.WithFields(log.Fields{"error": err, "stack": err.ErrorStack(), "addr": addr}).Fatal("Broken Page Alignment")
-    }
-  }
+		if addr%pagesize != 0 {
+			err := errors.Errorf("broken alignment")
+			log.WithFields(log.Fields{"error": err, "stack": err.ErrorStack(), "addr": addr}).Fatal("Broken Page Alignment")
+		}
+	}
 }
 
 func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
@@ -148,8 +149,8 @@ func (s *Emulator) ResetRegisters() *errors.Error {
 func (s *Emulator) addHooks() *errors.Error {
 
 	_, err := s.mu.HookAdd(uc.HOOK_BLOCK, func(mu uc.Unicorn, addr uint64, size uint32) {
-		                                      s.CurrentTrace.AddBlockRange(addr, addr+uint64(size))
-	                                      })
+		s.CurrentTrace.AddBlockRange(addr, addr+uint64(size))
+	})
 	if err != nil {
 		return wrap(err)
 	}

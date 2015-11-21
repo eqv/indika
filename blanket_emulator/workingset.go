@@ -1,12 +1,11 @@
 package blanket_emulator
 
 import (
-  "github.com/go-errors/errors"
+	"github.com/go-errors/errors"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 )
 
 const pagesize = 4096
-
 
 type WorkingSet struct {
 	mapped []uint64

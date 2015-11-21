@@ -1,11 +1,11 @@
 package disassemble
 
-import  (
-        "fmt"
-        "github.com/bnagy/gapstone"
-	      log "github.com/Sirupsen/logrus"
-        ds "github.com/ranmrdrakono/indika/data_structures"
-        )
+import (
+	"fmt"
+	log "github.com/Sirupsen/logrus"
+	"github.com/bnagy/gapstone"
+	ds "github.com/ranmrdrakono/indika/data_structures"
+)
 
 /* jump instructions */
 var jmp_flags = make(map[uint]bool)
@@ -111,25 +111,34 @@ func print_blocks(blocks map[ds.Range]bool) {
 	}
 }
 
-func GetBasicBlocks(codeoffset uint64, code []byte, function_bounds ds.Range) map[ds.Range]bool{
-  EP := function_bounds.From
+func GetBasicBlocks(codeoffset uint64, code []byte, function_bounds ds.Range) map[ds.Range]bool {
+	if function_bounds.To-function_bounds.From < 1 {
+		return make(map[ds.Range]bool)
+	}
+	_ = "breakpoint"
+
+	EP := function_bounds.From
 	engine, err := gapstone.New(gapstone.CS_ARCH_X86, gapstone.CS_MODE_64)
 
-  if err != nil { log.WithFields(log.Fields{"error": err}).Fatal("Failed to create Gapstone Disassembler")}
-  if EP-codeoffset > uint64(len(code)) || EP < codeoffset  || function_bounds.To > codeoffset + uint64(len(code)) {
-    log.WithFields(log.Fields{"function range": function_bounds, "code offset": codeoffset, "len of code": len(code)}).Fatal("invalid offset in code")
-  }
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Fatal("Failed to create Gapstone Disassembler")
+	}
+	if EP-codeoffset > uint64(len(code)) || EP < codeoffset || function_bounds.To > codeoffset+uint64(len(code)) {
+		log.WithFields(log.Fields{"function range": function_bounds, "code offset": codeoffset, "len of code": len(code)}).Fatal("invalid offset in code")
+	}
 
-  offset_in_code := EP - codeoffset
-  code = code[offset_in_code:offset_in_code+function_bounds.Length()]
+	offset_in_code := EP - codeoffset
+	code = code[offset_in_code : offset_in_code+function_bounds.Length()]
 	/* detailed options. enables parsing jump arguments*/
 	engine.SetOption(gapstone.CS_OPT_DETAIL, gapstone.CS_OPT_ON)
 
-  defer engine.Close()
-  /* disassemble code */
-  instrs, err := engine.Disasm(code, EP, 0)
+	defer engine.Close()
+	/* disassemble code */
+	instrs, err := engine.Disasm(code, EP, 0)
 
-  if err != nil { log.WithFields(log.Fields{"error": err} ).Fatal("Failed to Disassemble")}
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Fatal("Failed to Disassemble")
+	}
 
-  return Discover_basic_blocks(instrs)
+	return Discover_basic_blocks(instrs)
 }

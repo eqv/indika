@@ -3,8 +3,8 @@ package blanket_emulator
 import (
 	"encoding/hex"
 	"fmt"
-  "testing"
-//	"github.com/ranmrdrakono/indika/blanket_emulator"
+	"testing"
+	//	"github.com/ranmrdrakono/indika/blanket_emulator"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 	"strings"
 )
