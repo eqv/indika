@@ -1,6 +1,7 @@
 package blanket_emulator
 
 import (
+	log "github.com/Sirupsen/logrus"
 	"github.com/go-errors/errors"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 )
@@ -22,8 +23,10 @@ func NewWorkingSet(size int) *WorkingSet {
 }
 
 func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
+	log.WithFields(log.Fields{"addr": addr, "size": size}).Debug("Map Memory")
 	alignment := (addr % pagesize)
 	base_addr := addr - alignment
+	log.WithFields(log.Fields{"base_addr": base_addr, "size": uint64(pagesize)}).Debug("Map Memory called")
 	err := mu.MemMap(base_addr, uint64(pagesize))
 	if err != nil {
 		return wrap(err)
@@ -40,6 +43,7 @@ func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
 }
 
 func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) *errors.Error {
+	log.WithFields(log.Fields{"addr": addr}).Debug("Store In Working Set")
 	if s.newest == -1 {
 		s.mapped[0] = addr
 		s.oldest = 0
@@ -48,6 +52,7 @@ func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) *errors.Error
 	s.newest = (s.newest + 1) % len(s.mapped)
 	if s.newest == s.oldest { // unmap old page
 		addr_to_unmap := s.mapped[s.oldest]
+		log.WithFields(log.Fields{"addr_to_unmap": addr_to_unmap}).Debug("unmap")
 		err := mu.MemUnmap(addr_to_unmap, pagesize)
 		if err != nil {
 			return wrap(err)

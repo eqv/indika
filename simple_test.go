@@ -12,9 +12,14 @@ import (
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 	"io"
 	"os"
-	"reflect"
+	//	"reflect"
 	"testing"
 )
+
+func init() {
+	//log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.ErrorLevel)
+}
 
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
 	for rng, mapping := range maps {
@@ -24,13 +29,23 @@ func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.M
 	}
 	return nil
 }
+func filter_empty_bbs(bbs map[ds.Range]bool) map[ds.Range]bool {
+	res := make(map[ds.Range]bool)
+	for rng, _ := range bbs {
+		if !rng.IsEmpty() {
+			res[rng] = true
+		}
+	}
+	return res
+}
 
 func extract_bbs(maps map[ds.Range]*ds.MappedRegion, rng ds.Range) map[ds.Range]bool {
 	maped := find_mapping_for(maps, rng)
 	if maped == nil {
 		return nil
 	}
-	return disassemble.GetBasicBlocks(maped.Range.From, maped.Data, rng)
+	blocks := disassemble.GetBasicBlocks(maped.Range.From, maped.Data, rng)
+	return filter_empty_bbs(blocks)
 }
 
 func mapKeysRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
@@ -44,7 +59,7 @@ func mapKeysRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
 func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *be.Emulator {
 	ev := be.NewEventsToMinHash()
 	config := be.Config{
-		MaxTraceInstructionCount: 1000,
+		MaxTraceInstructionCount: 100,
 		MaxTraceTime:             0,
 		MaxTracePages:            100,
 		Arch:                     uc.ARCH_X86,
@@ -92,21 +107,25 @@ func TestRun(t *testing.T) {
 	fmt.Println("done making blanket emulator")
 
 	for rng, symb := range symbols {
-		if symb.Type == ds.FUNC && symb.Name == "str_reverse" {
-			fmt.Printf("found function %v\n", symb.Name)
-			fmt.Printf("extract bbs\n")
+		if symb.Type == ds.FUNC { //&& symb.Name == "str_reverse" {
+			//			fmt.Printf("found function %v\n", symb.Name)
+			//			fmt.Printf("extract bbs\n")
 			bbs := extract_bbs(maps, rng)
-			expected_bbs := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
-			if !reflect.DeepEqual(bbs, expected_bbs) {
-				fmt.Printf("disassembly failure")
+			if len(bbs) == 0 {
+				continue
 			}
+			//expected_bbs := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
+			//if !reflect.DeepEqual(bbs, expected_bbs) {
+			//	fmt.Printf("disassembly failure")
+			//}
+			fmt.Printf("found function %v\n", symb.Name)
 			fmt.Printf("running for %v \n", bbs)
 			err := emulator.FullBlanket(bbs)
 			if err != nil {
 				log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
 			}
 			ev := emulator.Config.EventHandler.(*be.EventsToMinHash)
-			fmt.Println("hash %v", ev.GetHash(80))
+			fmt.Println("hash %v", ev.GetHash(60))
 		}
 	}
 }

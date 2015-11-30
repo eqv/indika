@@ -39,6 +39,10 @@ func (s *Range) Length() uint64 {
 	return s.To - s.From
 }
 
+func (s *Range) IsEmpty() bool {
+	return s.To <= s.From
+}
+
 func NewRange(from, to uint64) Range {
 	if from > to {
 		log.WithFields(log.Fields{"from": from, "to": to}).Warning("Range with swaped bounds")

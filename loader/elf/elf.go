@@ -69,6 +69,8 @@ const (
 
 func elfSymbolTypeToSymbolType(elfsymbol uint) ds.SymbolType {
 	switch elfsymbol & 0xf {
+	case STT_NOTYPE:
+		return ds.UNKNOWN
 	case STT_OBJECT:
 		return ds.DATA
 	case STT_COMMON:
@@ -96,7 +98,6 @@ func GetSymbols(e *elf.File) map[ds.Range]*ds.Symbol {
 	for _, sym := range symbols {
 		sym_type := elfSymbolTypeToSymbolType(uint(sym.Info))
 		symbol := ds.NewSymbol(sym.Name, sym_type)
-		fmt.Printf("symbol %v\n", symbol)
 		res[ds.NewRange(sym.Value, sym.Value+sym.Size)] = symbol
 	}
 	return res

@@ -5,6 +5,8 @@ import (
 )
 
 const initial_salt = uint64(0xbbed475f4c2c4c03)
+const invalid_salt = uint64(0xe629c416d6207e3f)
+
 const order_salt = uint64(0x6e53469168745d93)
 const final_salt = uint64(0x12ef5c82f29260c5)
 const mem_salt = uint64(0xa66aec150c63e3fe)
@@ -37,6 +39,10 @@ func SysEventHash(syscallnum uint64) uint64 {
 
 func CallEventHash(arg1 uint64, arg2 uint64) uint64 {
 	return fast_hash(fast_hash(initial_salt, arg1), arg2)
+}
+
+func InvalidInstructionEventHash(arg1 uint64) uint64 {
+	return fast_hash(invalid_salt, arg1)
 }
 
 func GetMem(addr uint64, size int) []byte {

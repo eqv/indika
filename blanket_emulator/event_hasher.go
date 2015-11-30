@@ -25,6 +25,10 @@ func (s *EventsToMinHash) SyscallEvent(number uint64) {
 	s.Events[SysEventHash(number)] = true
 }
 
+func (s *EventsToMinHash) InvalidInstructionEvent(offset uint64) {
+	s.Events[InvalidInstructionEventHash(offset)] = true
+}
+
 func (s *EventsToMinHash) GetMaxEventByHash(seed uint64) uint64 {
 	max_val := uint64(0)
 	max_hash := uint64(0)
