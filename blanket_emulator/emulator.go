@@ -77,6 +77,13 @@ func NewEmulator(codepages map[uint64]([]byte), conf Config) (*Emulator, *errors
 	return res, nil
 }
 
+
+func (s *Emulator) Close() *errors.Error {
+    mu := s.mu
+    s.mu = nil
+	  return wrap(mu.Close())
+}
+
 func check_consistency(codepages map[uint64]([]byte)) {
 	for addr, _ := range codepages {
 		if addr%pagesize != 0 {
@@ -106,18 +113,16 @@ func get_addresses_from_codepages(codepages map[uint64]([]byte)) []uint64 {
 func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
 	for _, addr := range get_addresses_from_codepages(codepages) {
 		val := codepages[addr]
-		for page := addr - (addr % pagesize); ; page += pagesize {
-			if err := s.mu.MemMap(page, pagesize); err != nil {
-				return wrap(err)
-			}
-			if page+pagesize >= addr+uint64(len(val)) {
-				break
-			}
-		}
-		log.WithFields(log.Fields{"addr": addr, "length": len(val)}).Debug("Write Memory Content")
-		if err := s.mu.MemWrite(addr, val); err != nil {
-			return wrap(err)
-		}
+    page := addr - (addr % pagesize)
+    size := uint64(len(val)) - (uint64(len(val)) % pagesize) + pagesize
+    if err := s.mu.MemMapProt(page, size, uc.PROT_WRITE|uc.PROT_READ|uc.PROT_EXEC); err != nil {
+      return wrap(err)
+    }
+    log.WithFields(log.Fields{"addr": addr, "length": len(val)}).Debug("Write Memory Content")
+    if err := s.mu.MemWrite(addr, val); err != nil {
+      return wrap(err)
+
+    }
 	}
 	return nil
 }
@@ -134,7 +139,8 @@ func getLastBlockEndFromSet(blocks_to_visit *map[ds.Range]bool) uint64 {
 
 func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error {
 	last_block_end := getLastBlockEndFromSet(&blocks_to_visit)
-	for {
+  max_blocks_number := len(blocks_to_visit)+5
+  for  i := 0; i < max_blocks_number; i++ {
 		s.CurrentTrace = NewTrace(&blocks_to_visit)
 		addr, should_continue := s.CurrentTrace.FirstUnseenBlock()
 		if !should_continue {
@@ -154,7 +160,7 @@ func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error 
 		}
 		s.CurrentTrace = nil
 	}
-	return nil
+  return errors.Errorf("Failed to run full blanket, remaining: %d (of %d)" , len(blocks_to_visit), max_blocks_number)
 }
 
 func (s *Emulator) handle_emulator_error(err error) *errors.Error {
@@ -174,6 +180,7 @@ func (s *Emulator) RunOneTrace(addr uint64, end uint64) *errors.Error { //TODO i
 	if addr >= end {
 		return wrap(errors.New(fmt.Sprintf("Empty BB from %x to %x", addr, end)))
 	}
+  log.WithFields(log.Fields{"addr": addr, "to": end}).Debug("Run One Trace")
 	opt := uc.UcOptions{Timeout: s.Config.MaxTraceTime, Count: s.Config.MaxTraceInstructionCount}
 	err := s.mu.StartWithOptions(addr, end, &opt)
 	return s.handle_emulator_error(err)

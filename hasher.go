@@ -17,8 +17,8 @@ import (
 )
 
 func init() {
-	//log.SetLevel(log.DebugLevel)
-	log.SetLevel(log.ErrorLevel)
+	log.SetLevel(log.DebugLevel)
+	//log.SetLevel(log.ErrorLevel)
 }
 
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
@@ -60,7 +60,7 @@ func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *be.Emulator {
 	ev := be.NewEventsToMinHash()
 	config := be.Config{
 		MaxTraceInstructionCount: 100,
-		MaxTraceTime:             100,
+		MaxTraceTime:             0,
 		MaxTracePages:            50,
 		Arch:                     uc.ARCH_X86,
 		Mode:                     uc.MODE_64,
@@ -96,17 +96,18 @@ func check(err *errors.Error) {
 }
 
 func pad_func_name(str string) string{
-  if len(str) > 20 {return str[:20]}
-  pad_len := 20-len(str)
+  name_len := 40
+  if len(str) > name_len {return str[:name_len]}
+  pad_len := name_len-len(str)
   pad := make([]byte, pad_len)
   for i:= 0; i < pad_len; i++ {pad[i]=0x20}
   return str+string(pad)
 }
 
 func main(){
-	file := os.Args[0]
-  file = "samples/simple/O0/strings"
-  file = "samples/binutils/bin_O0/addr2line"
+	file := os.Args[1]
+  //file = "samples/simple/O0/strings"
+  //file = "samples/binutils/bin_O0/addr2line"
 	f := ioReader(file)
 	_elf, err := elf.NewFile(f)
 	check(wrap(err))
@@ -115,7 +116,16 @@ func main(){
 	fmt.Println("done loading")
 
 	for rng, symb := range symbols {
-		if symb.Type == ds.FUNC { //&& symb.Name=="str_id"{
+		if symb.Type == ds.FUNC {
+      if len(os.Args) > 2 {
+        found := false
+        for _,str := range os.Args {
+          if str == symb.Name {
+            found = true
+          }
+        }
+        if !found {continue;}
+      }
 			bbs := extract_bbs(maps, rng)
 			if len(bbs) == 0 {
 				continue
@@ -124,11 +134,14 @@ func main(){
       emulator := MakeBlanketEmulator(maps)
 			err := emulator.FullBlanket(bbs)
 			if err != nil {
-				log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
+				log.WithFields(log.Fields{"error": err}).Error("Error running Blanket")
+        continue
 			}
 			ev := emulator.Config.EventHandler.(*be.EventsToMinHash)
 			fmt.Printf("hash %v\n", hex.EncodeToString(ev.GetHash(32)))
-			//fmt.Println("events %v", ev.Inspect())
+//			fmt.Println("events %v", ev.Inspect())
+      emulator.Close()
+      emulator = nil
 		}
 	}
 }

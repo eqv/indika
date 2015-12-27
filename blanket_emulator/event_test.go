@@ -8,6 +8,8 @@ import (
 	"reflect"
 	"testing"
   "encoding/binary"
+  "time"
+  "fmt"
 )
 
 func init() {
@@ -135,5 +137,24 @@ func TestRun(t *testing.T) {
   expected_events := EventsToMinHash{Events: expected_events_set}
   if !reflect.DeepEqual(ev, &expected_events) {
     t.Error("Wrong Events, expected:", expected_events.Inspect(), " got: ", ev.Inspect())
+  }
+}
+
+
+func TestTime(t *testing.T) {
+  maps := make(map[ds.Range]*ds.MappedRegion)
+  content := make([]byte, 1000000)
+  base := uint64(0x40000)
+  rng := ds.NewRange(base,base+uint64(len(content)))
+  maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
+	emulator := MakeBlanketEmulator(maps)
+  for i:= 0 ; i < 100 ; i++ {
+    start := time.Now()
+    map_write := make(map[uint64]([]byte))
+    map_write[base]=content
+    emulator.WriteMemory(map_write)
+ 
+    elapsed := time.Since(start)
+    fmt.Printf("write took %s\n", elapsed)
   }
 }
