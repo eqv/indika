@@ -6,15 +6,9 @@ import (
 	ds "github.com/ranmrdrakono/indika/data_structures"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 	"sort"
+  "fmt"
 )
 
-type EventHandler interface {
-	WriteEvent(addr, value uint64)
-	ReadEvent(addr uint64)
-	BlockEvent(start_addr, end_addr uint64)
-	SyscallEvent(number uint64)
-	InvalidInstructionEvent(addr uint64)
-}
 
 type Emulator struct {
 	CurrentTrace *Trace
@@ -22,6 +16,17 @@ type Emulator struct {
 	Config       Config
 	mu           uc.Unicorn
 	codepages    map[uint64]([]byte)
+  last_valid_read uint64 //will be needed to weed out the additional reads reported due to missalignment
+  last_valid_write uint64 //will be needed to weed out the additional writes reported due to missalignment
+  last_valid_write_size uint64 //will be needed to weed out the additional writes reported due to missalignment
+}
+
+type EventHandler interface {
+	WriteEvent(em *Emulator, addr, value uint64)
+	ReadEvent(em *Emulator, addr uint64)
+	BlockEvent(em *Emulator, start_addr, end_addr uint64)
+	SyscallEvent(em *Emulator,number uint64)
+	InvalidInstructionEvent(em *Emulator, addr uint64)
 }
 
 type Config struct {
@@ -32,6 +37,8 @@ type Config struct {
 	Mode                     int
 	EventHandler             EventHandler
 }
+
+const REG_STACK = 5
 
 func wrap(err error) *errors.Error {
 	if err != nil {
@@ -136,8 +143,14 @@ func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error 
 		if err := s.RunOneTrace(addr, last_block_end); err != nil {
 			return wrap(err)
 		}
-		if err := s.WorkingSet.Clear(s.mu); err != nil {
-			return wrap(err)
+		if err := s.ResetWorkingSet(); err != nil {
+			return err
+		}
+		if err := s.ResetRegisters(); err != nil {
+			return err
+		}
+		if err := s.ResetMemoryImage(); err != nil {
+			return err
 		}
 		s.CurrentTrace = nil
 	}
@@ -151,7 +164,7 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 	uc_err := err.(uc.UcError)
 	if uc_err == uc.ERR_INSN_INVALID {
 		ip, _ := s.mu.RegRead(uc.X86_REG_RIP)
-		s.Config.EventHandler.InvalidInstructionEvent(ip)
+		s.Config.EventHandler.InvalidInstructionEvent(s, ip)
 		return nil
 	}
 	return wrap(err)
@@ -159,9 +172,8 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 
 func (s *Emulator) RunOneTrace(addr uint64, end uint64) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
 	if addr >= end {
-		log.WithFields(log.Fields{"addr": addr, "end": end}).Fatal("Empty BB")
+		return wrap(errors.New(fmt.Sprintf("Empty BB from %x to %x", addr, end)))
 	}
-	log.WithFields(log.Fields{"from": addr, "to": end}).Debug("Run One Trace")
 	opt := uc.UcOptions{Timeout: s.Config.MaxTraceTime, Count: s.Config.MaxTraceInstructionCount}
 	err := s.mu.StartWithOptions(addr, end, &opt)
 	return s.handle_emulator_error(err)
@@ -189,39 +201,76 @@ func (s *Emulator) ResetRegisters() *errors.Error {
 	if err := s.mu.RegWrite(uc.X86_REG_RCX, GetReg(4)); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RSP, GetReg(5)); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RSP, GetReg(REG_STACK) - GetReg(REG_STACK)%4096); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RBP, GetReg(6)); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RBP, GetReg(REG_STACK) - GetReg(REG_STACK)%4096 + 50*8); err != nil {
 		return wrap(err)
 	}
 	if err := s.mu.RegWrite(uc.X86_REG_RSI, GetReg(7)); err != nil {
 		return wrap(err)
 	}
+
+	if err := s.mu.RegWrite(uc.X86_REG_RDI, GetReg(8)); err != nil {
+		return wrap(err)
+	}
 	return nil
 }
+
+func (s *Emulator) should_ignore_read(addr uint64, size int) bool {
+      is_above_initial_stack := addr <= GetReg(REG_STACK)
+      stack,_ := s.mu.RegRead(uc.X86_REG_RSP)
+      is_below_current_stack := addr >= stack
+      return is_above_initial_stack && is_below_current_stack
+}
+
+func (s *Emulator) should_ignore_write(addr uint64, size int) bool {
+      is_above_initial_stack := addr <= GetReg(REG_STACK)
+      stack,_ := s.mu.RegRead(uc.X86_REG_RSP)
+      is_below_current_stack := addr >= stack
+      return is_above_initial_stack && is_below_current_stack
+}
+
+func (s *Emulator) handleMemoryEvent(access int, addr uint64, size int, value int64){
+    ip,_ := s.mu.RegRead(uc.X86_REG_RIP)
+    if size <= 0 { panic("invalid write") }
+		if access == uc.MEM_WRITE {
+      if s.should_ignore_write(addr,size){
+        log.WithFields(log.Fields{"at": ip, "addr": addr, "value": value, "size": size}).Debug("Skip Write Event")
+        return
+      }
+      s.last_valid_write = addr
+      s.last_valid_write_size = uint64(size)
+      log.WithFields(log.Fields{"at": ip, "addr": addr, "value": value, "size": size}).Debug("Write Event")
+			s.Config.EventHandler.WriteEvent(s,addr, uint64(value))
+		} else {
+      if s.should_ignore_read(addr,size) {
+          log.WithFields(log.Fields{"at": ip,"addr": addr, "value": value, "size": size}).Debug("Skip Read Event")
+          return
+      }
+      s.last_valid_read = addr
+
+      log.WithFields(log.Fields{"at": ip,"addr": addr, "value": value, "size": size}).Debug("Read Event")
+			s.Config.EventHandler.ReadEvent(s,addr)
+		}
+}
+
 
 func (s *Emulator) addHooks() *errors.Error {
 
 	_, err := s.mu.HookAdd(uc.HOOK_BLOCK, func(mu uc.Unicorn, addr uint64, size uint32) {
 		if size < 1 {
-			log.WithFields(log.Fields{"addr": addr, "size": size}).Fatal("Empty BB")
+			log.WithFields( log.Fields{"addr": addr, "size": size} ).Error( "Empty BB" )
 		}
 		s.CurrentTrace.AddBlockRange(addr, addr+uint64(size)-1)
-		log.WithFields(log.Fields{"from": addr, "to": addr + uint64(size)}).Debug("BB visited")
+		log.WithFields(log.Fields{"from": addr, "to": addr + uint64(size)}).Debug( "BB visited" )
 	})
 	if err != nil {
 		return wrap(err)
 	}
 
 	_, err = s.mu.HookAdd(uc.HOOK_MEM_READ|uc.HOOK_MEM_WRITE, func(mu uc.Unicorn, access int, addr uint64, size int, value int64) {
-		if access == uc.MEM_WRITE {
-			log.WithFields(log.Fields{"addr": addr, "value": value}).Debug("Write Event")
-			s.Config.EventHandler.WriteEvent(addr, uint64(value))
-		} else {
-			log.WithFields(log.Fields{"addr": addr, "value": value}).Debug("Read Event")
-			s.Config.EventHandler.ReadEvent(addr)
-		}
+    s.handleMemoryEvent(access, addr, size, value);
 	})
 	if err != nil {
 		return wrap(err)
@@ -246,10 +295,28 @@ func (s *Emulator) addHooks() *errors.Error {
 
 	_, err = s.mu.HookAdd(uc.HOOK_INSN, func(mu uc.Unicorn) {
 		rax, _ := mu.RegRead(uc.X86_REG_RAX)
-		s.Config.EventHandler.SyscallEvent(rax)
+		s.Config.EventHandler.SyscallEvent(s,rax)
+    log.WithFields(log.Fields{"num": rax}).Debug("Syscall")
 	}, uc.X86_INS_SYSCALL)
 	if err != nil {
 		return wrap(err)
 	}
+
+//  hook_inst_int := func (mu uc.Unicorn){
+//		rax, _ := mu.RegRead(uc.X86_REG_RAX)
+//		s.Config.EventHandler.SyscallEvent(s,rax)
+//    log.WithFields(log.Fields{"num": rax}).Debug("Interrupt")
+//	}
+
+//	_, err = s.mu.HookAdd(uc.HOOK_INSN, hook_inst_int, uc.X86_INS_INT)
+//	if err != nil {
+//		return wrap(err)
+//	}
+
+//	s.mu.HookAdd(uc.HOOK_CODE, func(mu uc.Unicorn, addr uint64, size uint32) {
+//    rax,_ := s.mu.RegRead(uc.X86_REG_RAX)
+//    log.WithFields(log.Fields{"at": addr, "size": size, "RAX": rax}).Debug("Instruction")
+//	})
+
 	return nil
 }

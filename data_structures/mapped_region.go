@@ -13,3 +13,7 @@ type MappedRegion struct {
 	Flags PageFlags
 	Range Range
 }
+
+func NewMappedRegion(data []byte,flags PageFlags, rng Range) *MappedRegion {
+  return &MappedRegion{Data: data, Flags: flags, Range: rng}
+}

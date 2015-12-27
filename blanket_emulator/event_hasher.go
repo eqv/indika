@@ -1,32 +1,45 @@
 package blanket_emulator
+import ( 
+  "sort"
+  "strings"
+	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
+	log "github.com/Sirupsen/logrus"
+  )
 
 type EventsToMinHash struct {
-	Events map[uint64]bool
+	Events map[Event]bool
 }
 
 func NewEventsToMinHash() *EventsToMinHash {
 	res := new(EventsToMinHash)
-	res.Events = make(map[uint64]bool)
+	res.Events = make(map[Event]bool)
 	return res
 }
 
-func (s *EventsToMinHash) WriteEvent(addr, value uint64) {
-	s.Events[WriteEventHash(addr, value)] = true
+func (s *EventsToMinHash) WriteEvent(em *Emulator, addr, value uint64){
+  rsp,err := em.mu.RegRead(uc.X86_REG_RSP)
+  check(wrap(err))
+  if addr > GetReg(REG_STACK) && addr < rsp {
+    log.WithFields(log.Fields{"addr": addr, "value": value}).Debug("Write to StackFrame")
+  } else {
+    s.Events[WriteEvent{Addr: addr, Value: value}] = true
+    
+  }
 }
 
-func (s *EventsToMinHash) ReadEvent(addr uint64) {
-	s.Events[ReadEventHash(addr)] = true
+func (s *EventsToMinHash) ReadEvent(em *Emulator, addr uint64) {
+	s.Events[ReadEvent(addr)] = true
 }
 
-func (s *EventsToMinHash) BlockEvent(start_addr, end_addr uint64) {
+func (s *EventsToMinHash) BlockEvent(em *Emulator, start_addr, end_addr uint64) {
 }
 
-func (s *EventsToMinHash) SyscallEvent(number uint64) {
-	s.Events[SysEventHash(number)] = true
+func (s *EventsToMinHash) SyscallEvent(em *Emulator, number uint64) {
+	s.Events[SyscallEvent(number)] = true
 }
 
-func (s *EventsToMinHash) InvalidInstructionEvent(offset uint64) {
-	s.Events[InvalidInstructionEventHash(offset)] = true
+func (s *EventsToMinHash) InvalidInstructionEvent(em *Emulator, offset uint64) {
+	s.Events[InvalidInstructionEvent(offset)] = true
 }
 
 func (s *EventsToMinHash) GetMaxEventByHash(seed uint64) uint64 {
@@ -38,14 +51,25 @@ func (s *EventsToMinHash) GetMaxEventByHash(seed uint64) uint64 {
 	}
 
 	for ev, _ := range s.Events {
-		hash := fast_hash(seed, ev)
+		hash := fast_hash(seed, ev.Hash())
 		if hash > max_hash {
-			max_val = ev
+			max_val = ev.Hash()
 			max_hash = hash
 		}
 	}
 
 	return max_val
+}
+
+func (s *EventsToMinHash) Inspect() string{
+  res := make([]string, len(s.Events))
+   i := 0
+  for ev,_ := range s.Events {
+    res[i] = ev.Inspect()
+    i+=1
+  }
+  sort.Strings(res)
+  return "["+strings.Join(res,", ")+"]"
 }
 
 func (s *EventsToMinHash) GetHash(length uint) []byte {

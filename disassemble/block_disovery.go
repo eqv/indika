@@ -97,7 +97,7 @@ func search_end_addresses(instrs []gapstone.Instruction, bb_starts map[uint64]bo
 
 		/* basic block start or last instruction in list */
 		if (instr_counter == len(instrs)) || ok {
-			bb_ends[cur_bb] = uint64(instr.Address)
+			bb_ends[cur_bb] = next_addr //uint64(instr.Address)
 		}
 	}
 	return bb_ends
@@ -115,7 +115,6 @@ func GetBasicBlocks(codeoffset uint64, code []byte, function_bounds ds.Range) ma
 	if function_bounds.To-function_bounds.From < 1 {
 		return make(map[ds.Range]bool)
 	}
-	_ = "breakpoint"
 
 	EP := function_bounds.From
 	engine, err := gapstone.New(gapstone.CS_ARCH_X86, gapstone.CS_MODE_64)

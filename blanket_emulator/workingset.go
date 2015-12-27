@@ -31,7 +31,14 @@ func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
 	if err != nil {
 		return wrap(err)
 	}
-	err = mu.MemWrite(base_addr, GetMem(base_addr, pagesize))
+  mem := GetMem(base_addr, pagesize)
+  log.WithFields(log.Fields{"mem": mem[0:8]}).Debug("Memory written")
+	err = mu.MemWrite(base_addr, mem)
+  mem2,err := mu.MemRead(base_addr, pagesize)
+	if err != nil {
+		return wrap(err)
+	}
+  log.WithFields(log.Fields{"mem": mem2[0:8]}).Debug("Memory read")
 	if err != nil {
 		return wrap(err)
 	}
