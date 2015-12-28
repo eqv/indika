@@ -17,8 +17,8 @@ import (
 )
 
 func init() {
-	log.SetLevel(log.DebugLevel)
-	//log.SetLevel(log.ErrorLevel)
+	//log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.ErrorLevel)
 }
 
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
@@ -139,7 +139,7 @@ func main(){
 			}
 			ev := emulator.Config.EventHandler.(*be.EventsToMinHash)
 			fmt.Printf("hash %v\n", hex.EncodeToString(ev.GetHash(32)))
-//			fmt.Println("events %v", ev.Inspect())
+  		fmt.Println("events %v", ev.Inspect())
       emulator.Close()
       emulator = nil
 		}

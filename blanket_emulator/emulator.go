@@ -67,12 +67,6 @@ func NewEmulator(codepages map[uint64]([]byte), conf Config) (*Emulator, *errors
 	if err != nil {
 		return nil, errors.Wrap(err, 0)
 	}
-	if err = res.WriteMemory(codepages); err != nil {
-		return nil, errors.Wrap(err, 0)
-	}
-	if err = res.ResetRegisters(); err != nil {
-		return nil, errors.Wrap(err, 0)
-	}
 
 	return res, nil
 }
@@ -118,7 +112,7 @@ func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
     if err := s.mu.MemMapProt(page, size, uc.PROT_WRITE|uc.PROT_READ|uc.PROT_EXEC); err != nil {
       return wrap(err)
     }
-    log.WithFields(log.Fields{"addr": addr, "length": len(val)}).Debug("Write Memory Content")
+    log.WithFields(log.Fields{"addr": hex(addr), "length": len(val)}).Debug("Write Memory Content")
     if err := s.mu.MemWrite(addr, val); err != nil {
       return wrap(err)
 
@@ -140,24 +134,29 @@ func getLastBlockEndFromSet(blocks_to_visit *map[ds.Range]bool) uint64 {
 func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error {
 	last_block_end := getLastBlockEndFromSet(&blocks_to_visit)
   max_blocks_number := len(blocks_to_visit)+5
-  for  i := 0; i < max_blocks_number; i++ {
+
+  for i := 0; i < max_blocks_number; i++ {
 		s.CurrentTrace = NewTrace(&blocks_to_visit)
 		addr, should_continue := s.CurrentTrace.FirstUnseenBlock()
+
 		if !should_continue {
 			return nil
 		}
+
+    if err := s.ResetWorkingSet(); err != nil {
+      return err
+    }
+    if err := s.ResetRegisters(); err != nil {
+      return err
+    }
+    if err := s.ResetMemoryImage(); err != nil {
+      return err
+    }
+
 		if err := s.RunOneTrace(addr, last_block_end); err != nil {
 			return wrap(err)
 		}
-		if err := s.ResetWorkingSet(); err != nil {
-			return err
-		}
-		if err := s.ResetRegisters(); err != nil {
-			return err
-		}
-		if err := s.ResetMemoryImage(); err != nil {
-			return err
-		}
+
 		s.CurrentTrace = nil
 	}
   return errors.Errorf("Failed to run full blanket, remaining: %d (of %d)" , len(blocks_to_visit), max_blocks_number)
@@ -168,8 +167,9 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 		return nil
 	}
 	uc_err := err.(uc.UcError)
-	if uc_err == uc.ERR_INSN_INVALID {
-		ip, _ := s.mu.RegRead(uc.X86_REG_RIP)
+	ip, _ := s.mu.RegRead(uc.X86_REG_RIP)
+  log.WithFields(log.Fields{"err": err, "ip": hex(ip)}).Debug("Emulator Error Occured")
+	if uc_err == uc.ERR_INSN_INVALID  || uc_err == uc.ERR_FETCH_UNMAPPED{
 		s.Config.EventHandler.InvalidInstructionEvent(s, ip)
 		return nil
 	}
@@ -178,11 +178,12 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 
 func (s *Emulator) RunOneTrace(addr uint64, end uint64) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
 	if addr >= end {
-		return wrap(errors.New(fmt.Sprintf("Empty BB from %x to %x", addr, end)))
+		return wrap(errors.New(fmt.Sprintf("Empty BB from %x to %x", hex(addr), hex(end))))
 	}
-  log.WithFields(log.Fields{"addr": addr, "to": end}).Debug("Run One Trace")
+  log.WithFields(log.Fields{"addr": hex(addr), "to": hex(end)}).Debug("Run One Trace")
 	opt := uc.UcOptions{Timeout: s.Config.MaxTraceTime, Count: s.Config.MaxTraceInstructionCount}
 	err := s.mu.StartWithOptions(addr, end, &opt)
+  log.WithFields(log.Fields{"addr": hex(addr), "to": hex(end)}).Debug("Finished One Trace")
 	return s.handle_emulator_error(err)
 }
 
@@ -234,7 +235,7 @@ func (s *Emulator) should_ignore_read(addr uint64, size int) bool {
 func (s *Emulator) should_ignore_write(addr uint64, size int) bool {
       is_above_initial_stack := addr <= GetReg(REG_STACK)
       stack,_ := s.mu.RegRead(uc.X86_REG_RSP)
-      is_below_current_stack := addr >= stack
+      is_below_current_stack := addr >= stack-8
       return is_above_initial_stack && is_below_current_stack
 }
 
@@ -262,6 +263,9 @@ func (s *Emulator) handleMemoryEvent(access int, addr uint64, size int, value in
 		}
 }
 
+func hex(val uint64) string{
+  return fmt.Sprintf("0x%x",val)
+}
 
 func (s *Emulator) addHooks() *errors.Error {
 
@@ -270,7 +274,7 @@ func (s *Emulator) addHooks() *errors.Error {
 			log.WithFields( log.Fields{"addr": addr, "size": size} ).Error( "Empty BB" )
 		}
 		s.CurrentTrace.AddBlockRange(addr, addr+uint64(size)-1)
-		log.WithFields(log.Fields{"from": addr, "to": addr + uint64(size)}).Debug( "BB visited" )
+		log.WithFields(log.Fields{"from": hex(addr), "to": hex(addr + uint64(size)) }).Debug( "BB visited" )
 	})
 	if err != nil {
 		return wrap(err)
@@ -285,17 +289,25 @@ func (s *Emulator) addHooks() *errors.Error {
 
 	invalid := uc.HOOK_MEM_READ_INVALID | uc.HOOK_MEM_WRITE_INVALID | uc.HOOK_MEM_FETCH_INVALID
 	_, err = s.mu.HookAdd(invalid, func(mu uc.Unicorn, access int, addr uint64, size int, value int64) bool {
-		log.WithFields(log.Fields{"addr": addr, "size": size}).Debug("invalid memory access")
-		err2 := s.WorkingSet.Map(addr, uint64(size), mu)
-		if err2 != nil {
-			if err2.Err.(uc.UcError) == uc.ERR_WRITE_UNMAPPED {
-				log.WithFields(log.Fields{"error": err2, "stack": err2.ErrorStack()}).Warn("WRITE TO UNMAPPED MEMORY")
-			} else {
-				log.WithFields(log.Fields{"addr": addr, "size": size, "error": err2, "stack": err2.ErrorStack()}).Fatal("Error Mapping page")
-			}
-		}
-		return true
+		log.WithFields(log.Fields{"addr": hex(addr), "size": size}).Debug("invalid memory access")
+
+    if access == uc.MEM_FETCH_UNMAPPED || access == uc.MEM_FETCH_PROT {
+      return false;
+    }
+
+    if access == uc.MEM_READ_UNMAPPED || access == uc.MEM_WRITE_UNMAPPED {
+      err := s.WorkingSet.Map(addr, uint64(size), mu)
+      if err != nil {
+          log.WithFields(log.Fields{"addr": hex(addr), "size": size, "error": err, "stack": err.ErrorStack()}).Fatal("Error Mapping page")
+          return false
+      }
+      return true
+    }
+
+    log.WithFields(log.Fields{"addr": hex(addr), "access": access, "size": size}).Error("Unhandled Memory Error")
+    return false
 	})
+
 	if err != nil {
 		return wrap(err)
 	}
@@ -320,10 +332,10 @@ func (s *Emulator) addHooks() *errors.Error {
 //		return wrap(err)
 //	}
 
-//	s.mu.HookAdd(uc.HOOK_CODE, func(mu uc.Unicorn, addr uint64, size uint32) {
-//    rax,_ := s.mu.RegRead(uc.X86_REG_RAX)
-//    log.WithFields(log.Fields{"at": addr, "size": size, "RAX": rax}).Debug("Instruction")
-//	})
+	s.mu.HookAdd(uc.HOOK_CODE, func(mu uc.Unicorn, addr uint64, size uint32) {
+    rax,_ := s.mu.RegRead(uc.X86_REG_RAX)
+    log.WithFields(log.Fields{"at": hex(addr), "size": size, "RAX": hex(rax)}).Debug("Instruction")
+	})
 
 	return nil
 }

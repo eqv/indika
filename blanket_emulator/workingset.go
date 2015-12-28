@@ -23,11 +23,11 @@ func NewWorkingSet(size int) *WorkingSet {
 }
 
 func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
-	log.WithFields(log.Fields{"addr": addr, "size": size}).Debug("Map Memory")
+	log.WithFields(log.Fields{"addr": hex(addr), "size": size}).Debug("Map Memory")
 	alignment := (addr % pagesize)
 	base_addr := addr - alignment
-	log.WithFields(log.Fields{"base_addr": base_addr, "size": uint64(pagesize)}).Debug("Map Memory called")
-	err := mu.MemMap(base_addr, uint64(pagesize))
+	log.WithFields(log.Fields{"base_addr": hex(base_addr), "size": uint64(pagesize)}).Debug("Map Memory called")
+	err := mu.MemMapProt(base_addr, uint64(pagesize), uc.PROT_READ|uc.PROT_WRITE)
 	if err != nil {
 		return wrap(err)
 	}
