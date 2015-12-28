@@ -40,7 +40,7 @@ func GetSegments(e *elf.File) map[ds.Range]*ds.MappedRegion {
 	res := make(map[ds.Range]*ds.MappedRegion)
 	for _, prog_offset := range e.Progs {
 		hdr := prog_offset.ProgHeader
-		if hdr.Off == 0 && hdr.Filesz == 0 {
+		if (hdr.Off == 0 && hdr.Filesz == 0)  || hdr.Type !=  elf.PT_LOAD {
 			continue
 		}
 		info := new(ds.MappedRegion)

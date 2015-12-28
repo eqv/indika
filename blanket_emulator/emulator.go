@@ -107,9 +107,13 @@ func get_addresses_from_codepages(codepages map[uint64]([]byte)) []uint64 {
 func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
 	for _, addr := range get_addresses_from_codepages(codepages) {
 		val := codepages[addr]
-    page := addr - (addr % pagesize)
-    size := uint64(len(val)) - (uint64(len(val)) % pagesize) + pagesize
-    if err := s.mu.MemMapProt(page, size, uc.PROT_WRITE|uc.PROT_READ|uc.PROT_EXEC); err != nil {
+    data_end := addr + uint64(len(val))
+    page_start := addr - (addr % pagesize)
+    page_end := data_end + 4096 - data_end %4096
+    page_size := page_end - page_start
+    //s.mu.MemUnmap(page, size)
+    log.WithFields(log.Fields{"addr": hex(page_start), "length": page_size}).Debug("Map Memory")
+    if err := s.mu.MemMapProt(page_start, page_size, uc.PROT_WRITE|uc.PROT_READ|uc.PROT_EXEC); err != nil {
       return wrap(err)
     }
     log.WithFields(log.Fields{"addr": hex(addr), "length": len(val)}).Debug("Write Memory Content")

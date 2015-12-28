@@ -17,8 +17,8 @@ import (
 )
 
 func init() {
-	//log.SetLevel(log.DebugLevel)
-	log.SetLevel(log.ErrorLevel)
+	log.SetLevel(log.DebugLevel)
+	//log.SetLevel(log.ErrorLevel)
 }
 
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
@@ -114,6 +114,7 @@ func main(){
 	maps := loader.GetSegments(_elf)
 	symbols := loader.GetSymbols(_elf)
 	fmt.Println("done loading")
+  fmt.Printf("%v", maps)
 
 	for rng, symb := range symbols {
 		if symb.Type == ds.FUNC {

@@ -2,7 +2,10 @@ package indika
 
 import (
 	"fmt"
+	log "github.com/Sirupsen/logrus"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
+//	be "github.com/ranmrdrakono/indika/blanket_emulator"
+	"github.com/go-errors/errors"
 	"testing"
 )
 
@@ -105,10 +108,61 @@ func run() error {
   return nil
 }
 
-func TestRunExample(t *testing.T) {
-  fmt.Println("foo")
-	if err := run(); err != nil {
-		fmt.Println(err)
-	}
-  t.Fail()
+func check(err error){
+  if err != nil {
+    errw := errors.Wrap(err,1)
+    log.WithFields(log.Fields{"error": errw, "stack": errw.ErrorStack()}).Fatal("Error running test")
+  }
 }
+
+//func TestRunMapPages(t *testing.T){
+//    maps := make(map[uint64]([]byte))
+//    maps[0x84ce00] = make([]byte, 25160)
+//
+//    ev := be.NewEventsToMinHash()
+//    config := be.Config{
+//      MaxTraceInstructionCount: 100,
+//      MaxTraceTime:             0,
+//      MaxTracePages:            50,
+//      Arch:                     uc.ARCH_X86,
+//      Mode:                     uc.MODE_64,
+//      EventHandler:             ev,
+//    }
+//    em, _ := be.NewEmulator(maps, config)
+//    check(em.WriteMemory(maps))
+//}
+
+func TestRunMapPages2(t *testing.T){
+	mu, err := uc.NewUnicorn(uc.ARCH_X86, uc.MODE_64)
+  check(err)
+  data := make([]byte, 25160)
+  offset := uint64(0x84ce00)
+  poffset := offset - (offset%4096)
+  dlen := uint64(len(data))
+  pend_offset := offset + dlen + 4096-(offset+dlen)%4096
+  plen := pend_offset - poffset
+  log.WithFields(log.Fields{"offset": offset, "page offset": poffset, "page length": plen, "data length": dlen}).Error("Mapping")
+	check( mu.MemMap(poffset, plen) )
+  check( mu.MemWrite(offset, data))
+}
+
+//func TestRunMapUnmap(t *testing.T){
+//	mu, err := uc.NewUnicorn(uc.ARCH_X86, uc.MODE_64)
+//  check(err)
+//  //check(addHooks(mu))
+//
+//	check( mu.MemMap(0x0000, 0x4000) )
+//	check( mu.MemMap(0x0000, 0x1000) )
+//	check( mu.MemUnmap(0x2000, 0x2000) )
+//
+//  //err = mu.StartWithOptions(0x6000, 0x1500, &uc.UcOptions{Timeout: 0, Count: 10})
+//  check( err )
+//}
+
+//func TestRunExample(t *testing.T) {
+//  fmt.Println("foo")
+//	if err := run(); err != nil {
+//		fmt.Println(err)
+//	}
+//  t.Fail()
+//}
