@@ -67,10 +67,7 @@ func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *be.Emulator {
 		EventHandler:             ev,
 	}
 	mem_starts := mapKeysRangeToStarts(mem)
-	em, err := be.NewEmulator(mem_starts, config)
-	if err != nil {
-		log.WithFields(log.Fields{"error": err}).Fatal("Error creating Emulator")
-	}
+	em := be.NewEmulator(mem_starts, config)
 	return em
 }
 

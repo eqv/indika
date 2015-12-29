@@ -18,7 +18,6 @@ func addHooks(mu uc.Unicorn) error {
     return err
   }
 
-
 	_,err = mu.HookAdd(uc.HOOK_CODE, func(mu uc.Unicorn, addr uint64, size uint32) {
 		fmt.Printf("Code: 0x%x, 0x%x\n", addr, size)
 	})
@@ -53,9 +52,9 @@ func addHooks(mu uc.Unicorn) error {
       return false
 		}
 		fmt.Printf(": @0x%x, 0x%x = 0x%x\n", addr, size, value)
-    err := mu.MemMap(addr - (addr % 4096), 0x1000)
-    if err != nil {panic(err)}
-		return true
+    //err := mu.MemMap(addr - (addr % 4096), 0x1000)
+    //if err != nil {panic(err)}
+		return false
 	})
   if err != nil {
     return err
@@ -132,18 +131,32 @@ func check(err error){
 //    check(em.WriteMemory(maps))
 //}
 
-func TestRunMapPages2(t *testing.T){
+//func TestRunMapPages2(t *testing.T){
+//	mu, err := uc.NewUnicorn(uc.ARCH_X86, uc.MODE_64)
+//  check(err)
+//  data := make([]byte, 25160)
+//  offset := uint64(0x84ce00)
+//  poffset := offset - (offset%4096)
+//  dlen := uint64(len(data))
+//  pend_offset := offset + dlen + 4096-(offset+dlen)%4096
+//  plen := pend_offset - poffset
+//  log.WithFields(log.Fields{"offset": offset, "page offset": poffset, "page length": plen, "data length": dlen}).Error("Mapping")
+//	check( mu.MemMap(poffset, plen) )
+//  check( mu.MemWrite(offset, data))
+//}
+
+func TestStateBetweenRuns(t *testing.T){
+  data := []byte{93, 195, 85, 72, 137, 229, 72, 139, 5, 52, 7, 67, 0, 72, 139, 64, 64, 255, 208, 93, 195, 85, 72, 137}
+  offset := uint64(0x422f96)
 	mu, err := uc.NewUnicorn(uc.ARCH_X86, uc.MODE_64)
-  check(err)
-  data := make([]byte, 25160)
-  offset := uint64(0x84ce00)
-  poffset := offset - (offset%4096)
-  dlen := uint64(len(data))
-  pend_offset := offset + dlen + 4096-(offset+dlen)%4096
-  plen := pend_offset - poffset
-  log.WithFields(log.Fields{"offset": offset, "page offset": poffset, "page length": plen, "data length": dlen}).Error("Mapping")
-	check( mu.MemMap(poffset, plen) )
-  check( mu.MemWrite(offset, data))
+  check( err )
+  check( addHooks(mu) )
+	check( mu.MemMap(offset - (offset%4096), 4096) )
+	check( mu.MemMapProt(0, 0x4000, uc.PROT_READ|uc.PROT_WRITE) )
+  check( mu.MemWrite(offset, data) )
+  check( mu.RegWrite(uc.X86_REG_RAX, 0x1337) )
+  check( mu.StartWithOptions(offset, ^uint64(0), &uc.UcOptions{Timeout: 0, Count: 10}) )
+  t.Fail()
 }
 
 //func TestRunMapUnmap(t *testing.T){

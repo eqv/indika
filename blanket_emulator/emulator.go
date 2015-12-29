@@ -53,24 +53,39 @@ func check(err *errors.Error) {
 	}
 }
 
-func NewEmulator(codepages map[uint64]([]byte), conf Config) (*Emulator, *errors.Error) {
+func NewEmulator(codepages map[uint64]([]byte), conf Config) *Emulator {
 	res := new(Emulator)
 	res.Config = conf
 	res.codepages = codepages
-	res.WorkingSet = NewWorkingSet(conf.MaxTracePages)
-	mu, err2 := uc.NewUnicorn(conf.Arch, conf.Mode)
-	if err2 != nil {
-		return nil, errors.Wrap(err2, 0)
-	}
-	res.mu = mu
-	err := res.addHooks()
-	if err != nil {
-		return nil, errors.Wrap(err, 0)
-	}
-
-	return res, nil
+	return res
 }
 
+func (s *Emulator) CreateUnicorn() *errors.Error {
+  if s.mu != nil {
+    s.Close()
+  }
+	mu, err2 := uc.NewUnicorn(s.Config.Arch, s.Config.Mode)
+	s.WorkingSet = NewWorkingSet(s.Config.MaxTracePages)
+	if err2 != nil {
+		return errors.Wrap(err2, 0)
+	}
+	s.mu = mu
+	err := s.addHooks()
+	if err != nil {
+		return errors.Wrap(err, 0)
+	}
+
+  if err := s.ResetMemoryImage(); err != nil {
+    return err
+  }
+  if err := s.ResetWorkingSet(); err != nil {
+    return err
+  }
+  if err := s.ResetRegisters(); err != nil {
+    return err
+  }
+  return nil
+}
 
 func (s *Emulator) Close() *errors.Error {
     mu := s.mu
@@ -111,32 +126,34 @@ func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
     page_start := addr - (addr % pagesize)
     page_end := data_end + 4096 - data_end %4096
     page_size := page_end - page_start
-    //s.mu.MemUnmap(page, size)
+    s.mu.MemUnmap(page_start, page_size)
     log.WithFields(log.Fields{"addr": hex(page_start), "length": page_size}).Debug("Map Memory")
-    if err := s.mu.MemMapProt(page_start, page_size, uc.PROT_WRITE|uc.PROT_READ|uc.PROT_EXEC); err != nil {
+    if err := s.mu.MemMapProt(page_start, page_size, uc.PROT_WRITE); err != nil {
       return wrap(err)
     }
     log.WithFields(log.Fields{"addr": hex(addr), "length": len(val)}).Debug("Write Memory Content")
     if err := s.mu.MemWrite(addr, val); err != nil {
       return wrap(err)
-
+    }
+    if err := s.mu.MemProtect(page_start, page_size, uc.PROT_READ|uc.PROT_EXEC); err != nil {
+      return wrap(err)
     }
 	}
 	return nil
 }
 
-func getLastBlockEndFromSet(blocks_to_visit *map[ds.Range]bool) uint64 {
-	res := uint64(0)
-	for rng := range *blocks_to_visit {
-		if rng.To > res {
-			res = rng.To
-		}
-	}
-	return res
-}
+//func getLastBlockEndFromSet(blocks_to_visit *map[ds.Range]bool) uint64 {
+//	res := uint64(0)
+//	for rng := range *blocks_to_visit {
+//		if rng.To > res {
+//			res = rng.To
+//		}
+//	}
+//	return res
+//}
 
 func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error {
-	last_block_end := getLastBlockEndFromSet(&blocks_to_visit)
+	//last_block_end := getLastBlockEndFromSet(&blocks_to_visit)
   max_blocks_number := len(blocks_to_visit)+5
 
   for i := 0; i < max_blocks_number; i++ {
@@ -147,17 +164,7 @@ func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error 
 			return nil
 		}
 
-    if err := s.ResetWorkingSet(); err != nil {
-      return err
-    }
-    if err := s.ResetRegisters(); err != nil {
-      return err
-    }
-    if err := s.ResetMemoryImage(); err != nil {
-      return err
-    }
-
-		if err := s.RunOneTrace(addr, last_block_end); err != nil {
+		if err := s.RunOneTrace(addr, ^uint64(0)); err != nil {
 			return wrap(err)
 		}
 
@@ -173,6 +180,11 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 	uc_err := err.(uc.UcError)
 	ip, _ := s.mu.RegRead(uc.X86_REG_RIP)
   log.WithFields(log.Fields{"err": err, "ip": hex(ip)}).Debug("Emulator Error Occured")
+
+  if uc_err == uc.ERR_READ_PROT || uc_err == uc.ERR_WRITE_PROT {
+    return nil //fix me and make it trace accesses
+  }
+
 	if uc_err == uc.ERR_INSN_INVALID  || uc_err == uc.ERR_FETCH_UNMAPPED{
 		s.Config.EventHandler.InvalidInstructionEvent(s, ip)
 		return nil
@@ -181,12 +193,23 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 }
 
 func (s *Emulator) RunOneTrace(addr uint64, end uint64) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
+  cerr := s.CreateUnicorn()
+  if cerr != nil { return cerr}
 	if addr >= end {
 		return wrap(errors.New(fmt.Sprintf("Empty BB from %x to %x", hex(addr), hex(end))))
 	}
+
+  dumpstart := 0x422f96
+  dumpend := 0x422fa9
+  mem,err2 := s.mu.MemRead(addr, pagesize)
+	if err2 != nil {
+		return wrap(err2)
+	}
+  log.WithFields(log.Fields{"addr": addr, "memdump": mem[0:dumpend-dumpstart+5]}).Debug("Memory read")
+
   log.WithFields(log.Fields{"addr": hex(addr), "to": hex(end)}).Debug("Run One Trace")
 	opt := uc.UcOptions{Timeout: s.Config.MaxTraceTime, Count: s.Config.MaxTraceInstructionCount}
-	err := s.mu.StartWithOptions(addr, end, &opt)
+  err := s.mu.StartWithOptions(addr, end, &opt)
   log.WithFields(log.Fields{"addr": hex(addr), "to": hex(end)}).Debug("Finished One Trace")
 	return s.handle_emulator_error(err)
 }
@@ -226,6 +249,209 @@ func (s *Emulator) ResetRegisters() *errors.Error {
 	if err := s.mu.RegWrite(uc.X86_REG_RDI, GetReg(8)); err != nil {
 		return wrap(err)
 	}
+
+	if err := s.mu.RegWrite(uc.X86_REG_EFLAGS   ,0); err != nil {return wrap(err)}
+  if err := s.mu.RegWrite(uc.X86_REG_FPSW     ,0); err != nil {return wrap(err)} 
+  if err := s.mu.RegWrite(uc.X86_REG_FS       ,0); err != nil {return wrap(err)} 
+	if err := s.mu.RegWrite(uc.X86_REG_GS       ,0); err != nil {return wrap(err)}    
+	if err := s.mu.RegWrite(uc.X86_REG_IP       ,0); err != nil {return wrap(err)}    
+  if err:= s.mu.RegWrite(uc.X86_REG_SI        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_SIL       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_SP        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_SPL       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_SS        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR0       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR1       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR2       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR3       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR4       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR5       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR6       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR7       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR8       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR9       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR10      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR11      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR12      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR13      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR14      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_CR15      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR0       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR1       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR2       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR3       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR4       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR5       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR6       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR7       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR8       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR9       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR10      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR11      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR12      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR13      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR14      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_DR15      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_FP0       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_FP1       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_FP2       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_FP3       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_FP4       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_FP5       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_FP6       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_FP7       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_K0        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_K1        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_K2        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_K3        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_K4        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_K5        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_K6        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_K7        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_MM0       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_MM1       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_MM2       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_MM3       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_MM4       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_MM5       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_MM6       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_MM7       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R8        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R9        ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R10       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R11       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R12       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R13       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R14       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R15       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ST0       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ST1       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ST2       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ST3       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ST4       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ST5       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ST6       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ST7       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM0      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM1      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM2      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM3      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM4      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM5      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM6      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM7      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM8      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM9      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM10     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM11     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM12     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM13     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM14     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM15     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM16     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM17     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM18     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM19     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM20     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM21     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM22     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM23     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM24     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM25     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM26     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM27     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM28     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM29     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM30     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_XMM31     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM0      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM1      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM2      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM3      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM4      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM5      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM6      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM7      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM8      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM9      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM10     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM11     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM12     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM13     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM14     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM15     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM16     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM17     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM18     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM19     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM20     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM21     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM22     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM23     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM24     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM25     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM26     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM27     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM28     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM29     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM30     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_YMM31     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM0      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM1      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM2      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM3      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM4      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM5      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM6      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM7      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM8      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM9      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM10     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM11     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM12     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM13     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM14     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM15     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM16     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM17     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM18     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM19     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM20     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM21     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM22     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM23     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM24     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM25     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM26     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM27     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM28     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM29     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM30     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_ZMM31     ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R8B       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R9B       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R10B      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R11B      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R12B      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R13B      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R14B      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R15B      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R8D       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R9D       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R10D      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R11D      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R12D      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R13D      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R14D      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R15D      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R8W       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R9W       ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R10W      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R11W      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R12W      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R13W      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R14W      ,0); err != nil {return wrap(err)}
+	if err:= s.mu.RegWrite(uc.X86_REG_R15W      ,0); err != nil {return wrap(err)}
 	return nil
 }
 
@@ -306,6 +532,10 @@ func (s *Emulator) addHooks() *errors.Error {
           return false
       }
       return true
+    }
+
+    if access == uc.MEM_READ_PROT || access == uc.MEM_WRITE_PROT {
+          return false
     }
 
     log.WithFields(log.Fields{"addr": hex(addr), "access": access, "size": size}).Error("Unhandled Memory Error")
