@@ -4,8 +4,11 @@ import (
 	xxhash "github.com/OneOfOne/xxhash/native"
 )
 
-const initial_salt = uint64(0xbbed475f4c2c4c03)
 const invalid_salt = uint64(0xe629c416d6207e3f)
+const return_salt = uint64(0xaac5349f49795c84)
+const sys_salt = uint64(0xc07aabb52435b174)
+const read_salt = uint64(0xf7921a7ed5b6e400)
+const write_salt = uint64(0x4768ff659301e8b7)
 
 const order_salt = uint64(0x6e53469168745d93)
 const final_salt = uint64(0x12ef5c82f29260c5)
@@ -26,20 +29,24 @@ func fast_hash(salt, val uint64) uint64 {
 }
 
 func ReadEventHash(addr uint64) uint64 {
-	return fast_hash(initial_salt, addr)
+	return fast_hash(read_salt, addr)
 }
 
 func WriteEventHash(addr uint64, value uint64) uint64 {
-	return fast_hash(fast_hash(initial_salt, addr), value)
+	return fast_hash(fast_hash(write_salt, addr), value)
 }
 
 func SysEventHash(syscallnum uint64) uint64 {
-	return fast_hash(initial_salt, syscallnum)
+	return fast_hash(sys_salt, syscallnum)
 }
 
-func CallEventHash(arg1 uint64, arg2 uint64) uint64 {
-	return fast_hash(fast_hash(initial_salt, arg1), arg2)
+func ReturnEventHash(value uint64) uint64 {
+	return fast_hash(return_salt, value)
 }
+
+//func CallEventHash(arg1 uint64, arg2 uint64) uint64 {
+//	return fast_hash(fast_hash(initial_salt, arg1), arg2)
+//}
 
 func InvalidInstructionEventHash(arg1 uint64) uint64 {
 	return fast_hash(invalid_salt, arg1)

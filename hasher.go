@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	log.SetLevel(log.DebugLevel)
+	//log.SetLevel(log.DebugLevel)
 	//log.SetLevel(log.ErrorLevel)
 }
 
@@ -48,14 +48,6 @@ func extract_bbs(maps map[ds.Range]*ds.MappedRegion, rng ds.Range) map[ds.Range]
 	return filter_empty_bbs(blocks)
 }
 
-func mapKeysRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
-	res := make(map[uint64][]byte)
-	for key, val := range mem {
-		res[key.From] = (*val).Data
-	}
-	return res
-}
-
 func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *be.Emulator {
 	ev := be.NewEventsToMinHash()
 	config := be.Config{
@@ -66,8 +58,7 @@ func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *be.Emulator {
 		Mode:                     uc.MODE_64,
 		EventHandler:             ev,
 	}
-	mem_starts := mapKeysRangeToStarts(mem)
-	em := be.NewEmulator(mem_starts, config)
+	em := be.NewEmulator(mem, config)
 	return em
 }
 
@@ -109,9 +100,10 @@ func main(){
 	_elf, err := elf.NewFile(f)
 	check(wrap(err))
 	maps := loader.GetSegments(_elf)
+
 	symbols := loader.GetSymbols(_elf)
 	fmt.Println("done loading")
-  fmt.Printf("%v", maps)
+  fmt.Printf("maps %v\n", maps)
 
 	for rng, symb := range symbols {
 		if symb.Type == ds.FUNC {
@@ -125,6 +117,7 @@ func main(){
         if !found {continue;}
       }
 			bbs := extract_bbs(maps, rng)
+      //fmt.Printf("rng %v, bbs: %v\n",rng, bbs)
 			if len(bbs) == 0 {
 				continue
 			}
@@ -137,7 +130,7 @@ func main(){
 			}
 			ev := emulator.Config.EventHandler.(*be.EventsToMinHash)
 			fmt.Printf("hash %v\n", hex.EncodeToString(ev.GetHash(32)))
-  		fmt.Println("events %v", ev.Inspect())
+//  		fmt.Println("events %v", ev.Inspect())
       emulator.Close()
       emulator = nil
 		}

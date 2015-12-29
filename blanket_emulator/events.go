@@ -8,6 +8,7 @@ type Event interface  {
   Inspect() string
 }
 
+type ReturnEvent uint64
 type ReadEvent uint64
 type WriteEvent struct {
   Addr uint64
@@ -28,12 +29,20 @@ func (s SyscallEvent) Hash() uint64 {
   return SysEventHash(uint64(s))
 }
 
+func (s ReturnEvent) Hash() uint64 {
+  return ReturnEventHash(uint64(s))
+}
+
 func (s InvalidInstructionEvent) Hash() uint64 {
   return InvalidInstructionEventHash(uint64(s))
 }
 
 func (addr ReadEvent) Inspect() string {
   return fmt.Sprintf("Read([%x])", addr)
+}
+
+func (addr ReturnEvent) Inspect() string {
+  return fmt.Sprintf("Return([%x])", addr)
 }
 
 func (s WriteEvent) Inspect() string {

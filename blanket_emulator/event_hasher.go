@@ -2,29 +2,40 @@ package blanket_emulator
 import ( 
   "sort"
   "strings"
-	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
-	log "github.com/Sirupsen/logrus"
   )
 
 type EventsToMinHash struct {
 	Events map[Event]bool
+  StaticAddresses map[uint64]uint64
 }
 
 func NewEventsToMinHash() *EventsToMinHash {
 	res := new(EventsToMinHash)
 	res.Events = make(map[Event]bool)
+  res.StaticAddresses = make(map[uint64]uint64)
 	return res
 }
 
-func (s *EventsToMinHash) WriteEvent(em *Emulator, addr, value uint64){
-  rsp,err := em.mu.RegRead(uc.X86_REG_RSP)
-  check(wrap(err))
-  if addr > GetReg(REG_STACK) && addr < rsp {
-    log.WithFields(log.Fields{"addr": addr, "value": value}).Debug("Write to StackFrame")
-  } else {
-    s.Events[WriteEvent{Addr: addr, Value: value}] = true
-    
+func (s *EventsToMinHash) resolveStaticAddr(addr uint64) uint64{
+  if val,ok := s.StaticAddresses[addr]; ok {
+    return val
   }
+  next_val := uint64(0xe1f0ff5e70000)+uint64(len(s.StaticAddresses))+1
+  s.StaticAddresses[addr] = next_val
+  return next_val
+}
+
+func (s *EventsToMinHash) StaticWriteEvent(em *Emulator, addr, value uint64){
+    s.Events[WriteEvent{Addr: s.resolveStaticAddr(addr), Value: value}] = true
+}
+
+func (s *EventsToMinHash) StaticReadEvent(em *Emulator, addr uint64) {
+	s.Events[ReadEvent(s.resolveStaticAddr(addr))] = true
+}
+
+
+func (s *EventsToMinHash) WriteEvent(em *Emulator, addr, value uint64){
+    s.Events[WriteEvent{Addr: addr, Value: value}] = true
 }
 
 func (s *EventsToMinHash) ReadEvent(em *Emulator, addr uint64) {
@@ -36,6 +47,10 @@ func (s *EventsToMinHash) BlockEvent(em *Emulator, start_addr, end_addr uint64) 
 
 func (s *EventsToMinHash) SyscallEvent(em *Emulator, number uint64) {
 	s.Events[SyscallEvent(number)] = true
+}
+
+func (s *EventsToMinHash) ReturnEvent(em *Emulator, number uint64) {
+	s.Events[ReturnEvent(number)] = true
 }
 
 func (s *EventsToMinHash) InvalidInstructionEvent(em *Emulator, offset uint64) {
