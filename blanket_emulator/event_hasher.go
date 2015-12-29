@@ -6,33 +6,13 @@ import (
 
 type EventsToMinHash struct {
 	Events map[Event]bool
-  StaticAddresses map[uint64]uint64
 }
 
 func NewEventsToMinHash() *EventsToMinHash {
 	res := new(EventsToMinHash)
 	res.Events = make(map[Event]bool)
-  res.StaticAddresses = make(map[uint64]uint64)
 	return res
 }
-
-func (s *EventsToMinHash) resolveStaticAddr(addr uint64) uint64{
-  if val,ok := s.StaticAddresses[addr]; ok {
-    return val
-  }
-  next_val := uint64(0xe1f0ff5e70000)+uint64(len(s.StaticAddresses))+1
-  s.StaticAddresses[addr] = next_val
-  return next_val
-}
-
-func (s *EventsToMinHash) StaticWriteEvent(em *Emulator, addr, value uint64){
-    s.Events[WriteEvent{Addr: s.resolveStaticAddr(addr), Value: value}] = true
-}
-
-func (s *EventsToMinHash) StaticReadEvent(em *Emulator, addr uint64) {
-	s.Events[ReadEvent(s.resolveStaticAddr(addr))] = true
-}
-
 
 func (s *EventsToMinHash) WriteEvent(em *Emulator, addr, value uint64){
     s.Events[WriteEvent{Addr: addr, Value: value}] = true

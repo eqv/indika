@@ -17,13 +17,12 @@ type Emulator struct {
 	mu           uc.Unicorn
 	codepages    map[uint64]([]byte)
 	binaryContentPages    map[ds.Range]bool
+  staticAddresses map[uint64]uint64
 }
 
 type EventHandler interface {
 	WriteEvent(em *Emulator, addr, value uint64)
 	ReadEvent(em *Emulator, addr uint64)
-	StaticWriteEvent(em *Emulator, addr, value uint64)
-	StaticReadEvent(em *Emulator, addr uint64)
 	BlockEvent(em *Emulator, start_addr, end_addr uint64)
 	SyscallEvent(em *Emulator,number uint64)
 	ReturnEvent(em *Emulator,number uint64)
@@ -76,6 +75,7 @@ func NewEmulator(mem map[ds.Range]*ds.MappedRegion, conf Config) *Emulator {
 	res.Config = conf
 	res.codepages =mapKeysRangeToStarts(mem)
   res.binaryContentPages = getSetOfOriginalContentPages(mem)
+  res.staticAddresses = make(map[uint64]uint64)
 	return res
 }
 
@@ -173,7 +173,7 @@ func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error 
 			return nil
 		}
 
-		if err := s.RunOneTrace(addr, ^uint64(0)); err != nil {
+		if err := s.RunOneTrace(addr); err != nil {
 			return wrap(err)
 		}
 
@@ -201,25 +201,14 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 	return wrap(err)
 }
 
-func (s *Emulator) RunOneTrace(addr uint64, end uint64) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
+func (s *Emulator) RunOneTrace(addr uint64) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
   cerr := s.CreateUnicorn()
   if cerr != nil { return cerr}
-	if addr >= end {
-		return wrap(errors.New(fmt.Sprintf("Empty BB from %x to %x", hex(addr), hex(end))))
-	}
 
-  dumpstart := 0x422f96
-  dumpend := 0x422fa9
-  mem,err2 := s.mu.MemRead(addr, pagesize)
-	if err2 != nil {
-		return wrap(err2)
-	}
-  log.WithFields(log.Fields{"addr": addr, "memdump": mem[0:dumpend-dumpstart+5]}).Debug("Memory read")
-
-  log.WithFields(log.Fields{"addr": hex(addr), "to": hex(end)}).Debug("Run One Trace")
+  log.WithFields(log.Fields{"addr": hex(addr)}).Debug("Run One Trace")
 	opt := uc.UcOptions{Timeout: s.Config.MaxTraceTime, Count: s.Config.MaxTraceInstructionCount}
-  err := s.mu.StartWithOptions(addr, end, &opt)
-  log.WithFields(log.Fields{"addr": hex(addr), "to": hex(end)}).Debug("Finished One Trace")
+  err := s.mu.StartWithOptions(addr, ^uint64(0), &opt)
+  log.WithFields(log.Fields{"addr": hex(addr)}).Debug("Finished One Trace")
 	return s.handle_emulator_error(err)
 }
 
@@ -487,36 +476,41 @@ func (s *Emulator) isStaticAddr(addr uint64) bool{
   return false
 }
 
-func (s *Emulator) handleMemoryEvent(access int, addr uint64, size int, value int64){
+func (s *Emulator) resolve_static(addr uint64) uint64{
+  if !s.isStaticAddr(addr) {return addr}
+  
+  if val,ok := s.staticAddresses[addr]; ok {
+    return val
+  }
+  next_val := uint64(0xe1f0ff5e70000)+uint64(len(s.staticAddresses))+1
+  s.staticAddresses[addr] = next_val
+  return next_val
+}
+
+func (s *Emulator) handleMemoryEvent(access int, addr uint64, size int, ivalue int64){
+    addr = s.resolve_static(addr)
+    val := s.resolve_static(uint64(ivalue))
     ip,_ := s.mu.RegRead(uc.X86_REG_RIP)
+
     if size <= 0 { panic("invalid write") }
+
 		if access == uc.MEM_WRITE {
       if s.should_ignore_write(addr,size){
-        log.WithFields(log.Fields{"at": hex(ip), "addr": hex(addr), "value": value, "size": size}).Debug("Skip Write Event")
+        log.WithFields(log.Fields{"at": hex(ip), "addr": hex(addr), "value": val, "size": size}).Debug("Skip Write Event")
         return
       }
 
-      if s.isStaticAddr(addr){
-        log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": value, "size": size}).Debug("Static Write Event")
-        s.Config.EventHandler.StaticWriteEvent(s,addr, uint64(value))
-      }else{
-        log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": value, "size": size}).Debug("Write Event")
-			  s.Config.EventHandler.WriteEvent(s,addr, uint64(value))
-      }
+      log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": val, "size": size}).Debug("Write Event")
+      s.Config.EventHandler.WriteEvent(s,addr, val)
 		} else {
 
       if s.should_ignore_read(addr,size) {
-          log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": value, "size": size}).Debug("Skip Read Event")
+          log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": val, "size": size}).Debug("Skip Read Event")
           return
       }
 
-      if s.isStaticAddr(addr){
-        log.WithFields(log.Fields{"at": hex(ip),"addr":hex(addr), "value": value, "size": size}).Debug("Static Read Event")
-			  s.Config.EventHandler.StaticReadEvent(s,addr)
-      }else{
-        log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": value, "size": size}).Debug("Read Event")
-			  s.Config.EventHandler.ReadEvent(s,addr)
-      }
+      log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": val, "size": size}).Debug("Read Event")
+      s.Config.EventHandler.ReadEvent(s,addr)
 		}
 }
 

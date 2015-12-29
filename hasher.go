@@ -18,7 +18,7 @@ import (
 
 func init() {
 	//log.SetLevel(log.DebugLevel)
-	//log.SetLevel(log.ErrorLevel)
+	log.SetLevel(log.ErrorLevel)
 }
 
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
@@ -94,8 +94,6 @@ func pad_func_name(str string) string{
 
 func main(){
 	file := os.Args[1]
-  //file = "samples/simple/O0/strings"
-  //file = "samples/binutils/bin_O0/addr2line"
 	f := ioReader(file)
 	_elf, err := elf.NewFile(f)
 	check(wrap(err))
@@ -117,7 +115,6 @@ func main(){
         if !found {continue;}
       }
 			bbs := extract_bbs(maps, rng)
-      //fmt.Printf("rng %v, bbs: %v\n",rng, bbs)
 			if len(bbs) == 0 {
 				continue
 			}
@@ -130,7 +127,7 @@ func main(){
 			}
 			ev := emulator.Config.EventHandler.(*be.EventsToMinHash)
 			fmt.Printf("hash %v\n", hex.EncodeToString(ev.GetHash(32)))
-//  		fmt.Println("events %v", ev.Inspect())
+			log.WithFields(log.Fields{"events": ev.Inspect()}).Debug("Done running Blanket")
       emulator.Close()
       emulator = nil
 		}
