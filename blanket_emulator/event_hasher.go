@@ -1,8 +1,9 @@
 package blanket_emulator
-import ( 
-  "sort"
-  "strings"
-  )
+
+import (
+	"sort"
+	"strings"
+)
 
 type EventsToMinHash struct {
 	Events map[Event]bool
@@ -14,8 +15,8 @@ func NewEventsToMinHash() *EventsToMinHash {
 	return res
 }
 
-func (s *EventsToMinHash) WriteEvent(em *Emulator, addr, value uint64){
-    s.Events[WriteEvent{Addr: addr, Value: value}] = true
+func (s *EventsToMinHash) WriteEvent(em *Emulator, addr, value uint64) {
+	s.Events[WriteEvent{Addr: addr, Value: value}] = true
 }
 
 func (s *EventsToMinHash) ReadEvent(em *Emulator, addr uint64) {
@@ -56,15 +57,15 @@ func (s *EventsToMinHash) GetMaxEventByHash(seed uint64) uint64 {
 	return max_val
 }
 
-func (s *EventsToMinHash) Inspect() string{
-  res := make([]string, len(s.Events))
-   i := 0
-  for ev,_ := range s.Events {
-    res[i] = ev.Inspect()
-    i+=1
-  }
-  sort.Strings(res)
-  return "["+strings.Join(res,", ")+"]"
+func (s *EventsToMinHash) Inspect() string {
+	res := make([]string, len(s.Events))
+	i := 0
+	for ev, _ := range s.Events {
+		res[i] = ev.Inspect()
+		i += 1
+	}
+	sort.Strings(res)
+	return "[" + strings.Join(res, ", ") + "]"
 }
 
 func (s *EventsToMinHash) GetHash(length uint) []byte {

@@ -13,7 +13,7 @@ import (
 	"io"
 	"os"
 	//	"reflect"
-  "encoding/hex"
+	"encoding/hex"
 )
 
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
@@ -78,25 +78,29 @@ func check(err *errors.Error) {
 	}
 }
 
-func pad_func_name(str string) string{
-  name_len := 40
-  if len(str) > name_len {return str[:name_len]}
-  pad_len := name_len-len(str)
-  pad := make([]byte, pad_len)
-  for i:= 0; i < pad_len; i++ {pad[i]=0x20}
-  return str+string(pad)
+func pad_func_name(str string) string {
+	name_len := 40
+	if len(str) > name_len {
+		return str[:name_len]
+	}
+	pad_len := name_len - len(str)
+	pad := make([]byte, pad_len)
+	for i := 0; i < pad_len; i++ {
+		pad[i] = 0x20
+	}
+	return str + string(pad)
 }
 
-func main(){
+func main() {
 	file := os.Args[1]
 
 	log.SetLevel(log.ErrorLevel)
 
-  fmt.Printf("%v\n",os.Args)
+	fmt.Printf("%v\n", os.Args)
 
-  if len(os.Args) >=3 && os.Args[2] == "d"{
-	  log.SetLevel(log.DebugLevel)
-  }
+	if len(os.Args) >= 3 && os.Args[2] == "d" {
+		log.SetLevel(log.DebugLevel)
+	}
 
 	f := ioReader(file)
 	_elf, err := elf.NewFile(f)
@@ -105,35 +109,37 @@ func main(){
 
 	symbols := loader.GetSymbols(_elf)
 	fmt.Println("done loading")
-  fmt.Printf("maps %v\n", maps)
+	fmt.Printf("maps %v\n", maps)
 
 	for rng, symb := range symbols {
 		if symb.Type == ds.FUNC {
-      if len(os.Args) > 2 {
-        found := false
-        for _,str := range os.Args {
-          if str == symb.Name {
-            found = true
-          }
-        }
-        if !found {continue;}
-      }
+			if len(os.Args) > 2 {
+				found := false
+				for _, str := range os.Args {
+					if str == symb.Name {
+						found = true
+					}
+				}
+				if !found {
+					continue
+				}
+			}
 			bbs := extract_bbs(maps, rng)
 			if len(bbs) == 0 {
 				continue
 			}
-      fmt.Printf("%v : ", pad_func_name(symb.Name))
-      emulator := MakeBlanketEmulator(maps)
+			fmt.Printf("%v : ", pad_func_name(symb.Name))
+			emulator := MakeBlanketEmulator(maps)
 			err := emulator.FullBlanket(bbs)
 			if err != nil {
 				log.WithFields(log.Fields{"error": err}).Error("Error running Blanket")
-        continue
+				continue
 			}
 			ev := emulator.Config.EventHandler.(*be.EventsToMinHash)
 			fmt.Printf("hash %v\n", hex.EncodeToString(ev.GetHash(32)))
 			log.WithFields(log.Fields{"events": ev.Inspect()}).Debug("Done running Blanket")
-      emulator.Close()
-      emulator = nil
+			emulator.Close()
+			emulator = nil
 		}
 	}
 }

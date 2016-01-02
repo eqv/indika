@@ -9,12 +9,12 @@ const (
 )
 
 type MappedRegion struct {
-	Data  []byte
-	Flags PageFlags
-	Range Range
-  Loaded bool
+	Data   []byte
+	Flags  PageFlags
+	Range  Range
+	Loaded bool
 }
 
-func NewMappedRegion(data []byte,flags PageFlags, rng Range) *MappedRegion {
-  return &MappedRegion{Data: data, Flags: flags, Range: rng}
+func NewMappedRegion(data []byte, flags PageFlags, rng Range) *MappedRegion {
+	return &MappedRegion{Data: data, Flags: flags, Range: rng}
 }

@@ -39,16 +39,8 @@ func extract_bbs(maps map[ds.Range]*ds.MappedRegion, rng ds.Range) map[ds.Range]
 		return nil
 	}
 	blocks := disassemble.GetBasicBlocks(maped.Range.From, maped.Data, rng)
-  fmt.Println("BBS without filter:", blocks, rng)
+	fmt.Println("BBS without filter:", blocks, rng)
 	return filter_empty_bbs(blocks)
-}
-
-func mapKeysRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
-	res := make(map[uint64][]byte)
-	for key, val := range mem {
-		res[key.From] = (*val).Data
-	}
-	return res
 }
 
 func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *Emulator {
@@ -61,59 +53,55 @@ func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *Emulator {
 		Mode:                     uc.MODE_64,
 		EventHandler:             ev,
 	}
-	mem_starts := mapKeysRangeToStarts(mem)
-	em, err := NewEmulator(mem_starts, config)
-	if err != nil {
-		log.WithFields(log.Fields{"error": err}).Fatal("Error creating Emulator")
-	}
+	em := NewEmulator(mem, config)
 	return em
 }
 
-func TestOneInstruction(t *testing.T){
-  maps := make(map[ds.Range]*ds.MappedRegion)
-  content := "\x48\x8b\x00"
-  base := uint64(0x40000)
-  rng := ds.NewRange(base,base+uint64(len(content)))
-  maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
+func TestOneInstruction(t *testing.T) {
+	maps := make(map[ds.Range]*ds.MappedRegion)
+	content := "\x48\x8b\x00"
+	base := uint64(0x40000)
+	rng := ds.NewRange(base, base+uint64(len(content)))
+	maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
 	emulator := MakeBlanketEmulator(maps)
 
-  bbs := extract_bbs(maps, rng)
-  expected_bbs := map[ds.Range]bool{ds.NewRange(base, base+uint64(len(content))): true}
-  if !reflect.DeepEqual(bbs, expected_bbs) {
-  	fmt.Printf("disassembly failure")
-  }
-  fmt.Println("BBS: %v %v", len(bbs), bbs)
-  err := emulator.FullBlanket(bbs)
-  if err != nil {
-    log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
-  }
-  ev := emulator.Config.EventHandler.(*EventsToMinHash)
-  fmt.Println("events for single instruction %v", ev.Inspect())
+	bbs := extract_bbs(maps, rng)
+	expected_bbs := map[ds.Range]bool{ds.NewRange(base, base+uint64(len(content))): true}
+	if !reflect.DeepEqual(bbs, expected_bbs) {
+		fmt.Printf("disassembly failure")
+	}
+	fmt.Println("BBS: %v %v", len(bbs), bbs)
+	err := emulator.FullBlanket(bbs)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
+	}
+	ev := emulator.Config.EventHandler.(*EventsToMinHash)
+	fmt.Println("events for single instruction %v", ev.Inspect())
 
-  expected_events := map[ds.]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
-  //if !reflect.DeepEqual(bbs, expected_bbs) {
-  //	fmt.Printf("disassembly failure")
-  //}
+	//expected_events := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
+	//ev := emulator.Config.EventHandler.(*EventsToMinHash)
+	//if !reflect.DeepEqual(bbs, expected_bbs) {
+	//	fmt.Printf("disassembly failure")
+	//}
 }
 
-
 func TestRun(t *testing.T) {
-  maps := make(map[ds.Range]*ds.MappedRegion)
-  content := "\x48\x8b\x00\x48\x8b\x00\x48\x8b\x00\x48\x89\x03\xcd\x50"
-  base := uint64(0x40000)
-  rng := ds.NewRange(base,base+uint64(len(content)))
-  maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
+	maps := make(map[ds.Range]*ds.MappedRegion)
+	content := "\x48\x8b\x00\x48\x8b\x00\x48\x8b\x00\x48\x89\x03\xcd\x50"
+	base := uint64(0x40000)
+	rng := ds.NewRange(base, base+uint64(len(content)))
+	maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
 	emulator := MakeBlanketEmulator(maps)
 
-  bbs := extract_bbs(maps, rng)
-  //expected_bbs := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
-  //if !reflect.DeepEqual(bbs, expected_bbs) {
-  //	fmt.Printf("disassembly failure")
-  //}
-  err := emulator.FullBlanket(bbs)
-  if err != nil {
-    log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
-  }
-  ev := emulator.Config.EventHandler.(*EventsToMinHash)
-  fmt.Println("events for single BB %v", ev.Inspect())
+	bbs := extract_bbs(maps, rng)
+	//expected_bbs := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
+	//if !reflect.DeepEqual(bbs, expected_bbs) {
+	//	fmt.Printf("disassembly failure")
+	//}
+	err := emulator.FullBlanket(bbs)
+	if err != nil {
+		log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
+	}
+	ev := emulator.Config.EventHandler.(*EventsToMinHash)
+	fmt.Println("events for single BB %v", ev.Inspect())
 }

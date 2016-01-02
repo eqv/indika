@@ -23,8 +23,8 @@ func max(a, b uint64) uint64 {
 	}
 }
 
-func (s *Range) Include(addr uint64) bool{
-  return s.From <= addr && addr <= s.To 
+func (s *Range) Include(addr uint64) bool {
+	return s.From <= addr && addr <= s.To
 }
 
 func (s *Range) Intersects(from, to uint64) bool {

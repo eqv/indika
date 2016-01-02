@@ -40,14 +40,14 @@ func GetSegments(e *elf.File) map[ds.Range]*ds.MappedRegion {
 	res := make(map[ds.Range]*ds.MappedRegion)
 	for _, prog_offset := range e.Progs {
 		hdr := prog_offset.ProgHeader
-		if (hdr.Off == 0 && hdr.Filesz == 0){
+		if hdr.Off == 0 && hdr.Filesz == 0 {
 			continue
 		}
 		info := new(ds.MappedRegion)
 		info.Range = ds.NewRange(hdr.Vaddr, hdr.Vaddr+hdr.Memsz)
 		info.Data = make([]byte, hdr.Filesz, hdr.Filesz)
 		info.Flags = elfFlagsToPageFlags(hdr.Flags)
-    info.Loaded = (hdr.Type == elf.PT_LOAD)
+		info.Loaded = (hdr.Type == elf.PT_LOAD)
 		res[info.Range] = info
 		size_read, err := prog_offset.Open().Read(info.Data)
 		check(err)

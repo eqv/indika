@@ -13,8 +13,8 @@ import (
 	"io"
 	"os"
 	//	"reflect"
+	"strings"
 	"testing"
-  "strings"
 )
 
 func init() {
@@ -108,7 +108,7 @@ func TestRun(t *testing.T) {
 	fmt.Println("done making blanket emulator")
 
 	for rng, symb := range symbols {
-		if symb.Type == ds.FUNC && strings.Contains(symb.Name,"str"){
+		if symb.Type == ds.FUNC && strings.Contains(symb.Name, "str") {
 			bbs := extract_bbs(maps, rng)
 			if len(bbs) == 0 {
 				continue
@@ -121,7 +121,7 @@ func TestRun(t *testing.T) {
 			}
 			ev := emulator.Config.EventHandler.(*be.EventsToMinHash)
 			fmt.Println("hash %v", ev.GetHash(60))
-//			fmt.Println("events %v", ev.Inspect())
+			//			fmt.Println("events %v", ev.Inspect())
 		}
 	}
 }
