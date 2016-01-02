@@ -10,6 +10,28 @@ import (
 )
 
 
+// Ignore reads/writes in the first 128 bytes above the stack pointer because some times if there are no further function calls, the
+// stackpointer is not adjusted to the current stack frame and local variables are actually stored outside of the
+// current stack frame
+const ignore_stackframe_above_stack_pointer_size = 128
+
+//Ignore reads/writes below the initial stack pointer. We need to ignore some amount below the stack pointer, since
+//there will be no correct stacksetup if we start from some intermediate basic block. Leave/Return will then read from an
+//address below the stackframe 
+const ignore_stackframe_below_initial_stack_pointer_size = 50*8
+
+
+// the returnaddress will differ, based on wether the trace encountert a valid stack frame epilog (in which case return
+// will jump to the value stored in the value addressed by the initial rsp) or not (in which case the function will
+// return to a value stored signifikant lower on the stack). Since Optimization will often remove the entire need for a
+// stackframe, this produces massively differen results.
+const ignore_invalid_instructions_after_return = true
+
+//any read/write/jmp that points into parts of the loaded binary will be replaced by the number of previous such memory
+//accesses+1 + 0xe1f0ff5e70000
+const resolve_static_addresses = true
+
+
 type Emulator struct {
 	CurrentTrace *Trace
 	WorkingSet   *WorkingSet
@@ -18,6 +40,7 @@ type Emulator struct {
 	codepages    map[uint64]([]byte)
 	binaryContentPages    map[ds.Range]bool
   staticAddresses map[uint64]uint64
+  last_instruction_was_ret bool
 }
 
 type EventHandler interface {
@@ -54,10 +77,12 @@ func check(err *errors.Error) {
 }
 
 
-func mapKeysRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
+func mapLoadableRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
 	res := make(map[uint64][]byte)
 	for key, val := range mem {
-		res[key.From] = (*val).Data
+    if val.Loaded {
+		  res[key.From] = (*val).Data
+    }
 	}
 	return res
 }
@@ -73,7 +98,7 @@ func getSetOfOriginalContentPages(mem map[ds.Range]*ds.MappedRegion) map[ds.Rang
 func NewEmulator(mem map[ds.Range]*ds.MappedRegion, conf Config) *Emulator {
 	res := new(Emulator)
 	res.Config = conf
-	res.codepages =mapKeysRangeToStarts(mem)
+	res.codepages = mapLoadableRangeToStarts(mem)
   res.binaryContentPages = getSetOfOriginalContentPages(mem)
   res.staticAddresses = make(map[uint64]uint64)
 	return res
@@ -110,15 +135,6 @@ func (s *Emulator) Close() *errors.Error {
     mu := s.mu
     s.mu = nil
 	  return wrap(mu.Close())
-}
-
-func check_consistency(codepages map[uint64]([]byte)) {
-	for addr, _ := range codepages {
-		if addr%pagesize != 0 {
-			err := errors.Errorf("broken alignment")
-			log.WithFields(log.Fields{"error": err, "stack": err.ErrorStack(), "addr": addr}).Fatal("Broken Page Alignment")
-		}
-	}
 }
 
 type UIntArray ([]uint64)
@@ -194,7 +210,12 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
     return nil //fix me and make it trace accesses
   }
 
-	if uc_err == uc.ERR_INSN_INVALID  || uc_err == uc.ERR_FETCH_UNMAPPED || uc_err == uc.ERR_FETCH_PROT{
+	if uc_err == uc.ERR_INSN_INVALID || uc_err == uc.ERR_FETCH_UNMAPPED || uc_err == uc.ERR_FETCH_PROT{
+    if ignore_invalid_instructions_after_return && s.last_instruction_was_ret {
+    log.WithFields(log.Fields{"at": hex(ip)}).Debug("Ignored Invalid Instruction Event")
+      return nil
+    }
+    log.WithFields(log.Fields{"at": hex(ip)}).Info("Invalid Instruction Event")
 		s.Config.EventHandler.InvalidInstructionEvent(s, ip)
 		return nil
 	}
@@ -453,21 +474,27 @@ func (s *Emulator) ResetRegisters() *errors.Error {
 	return nil
 }
 
-func (s *Emulator) should_ignore_read(addr uint64, size int) bool {
-      is_above_initial_stack := addr <= GetReg(REG_STACK)
+func (s *Emulator) is_in_stack_frame(addr uint64) bool {
+      is_above_initial_stack := addr <= GetReg(REG_STACK)+ignore_stackframe_below_initial_stack_pointer_size
       stack,_ := s.mu.RegRead(uc.X86_REG_RSP)
-      is_below_current_stack := addr >= stack
+      is_below_current_stack := addr >= stack - ignore_stackframe_above_stack_pointer_size
       return is_above_initial_stack && is_below_current_stack
+}
+
+func (s *Emulator) should_ignore_read(addr uint64, size int) bool {
+  return s.is_in_stack_frame(addr)
 }
 
 func (s *Emulator) should_ignore_write(addr uint64, size int) bool {
-      is_above_initial_stack := addr <= GetReg(REG_STACK)
-      stack,_ := s.mu.RegRead(uc.X86_REG_RSP)
-      is_below_current_stack := addr >= stack-8
-      return is_above_initial_stack && is_below_current_stack
+      return s.is_in_stack_frame(addr)
 }
 
 func (s *Emulator) isStaticAddr(addr uint64) bool{
+
+  if !resolve_static_addresses{
+    return false
+  }
+
   for prange,_ := range s.binaryContentPages{
     if prange.Include(addr) {
       return true
@@ -500,7 +527,7 @@ func (s *Emulator) handleMemoryEvent(access int, addr uint64, size int, ivalue i
         return
       }
 
-      log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": val, "size": size}).Debug("Write Event")
+      log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": val, "size": size}).Info("Write Event")
       s.Config.EventHandler.WriteEvent(s,addr, val)
 		} else {
 
@@ -509,13 +536,19 @@ func (s *Emulator) handleMemoryEvent(access int, addr uint64, size int, ivalue i
           return
       }
 
-      log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": val, "size": size}).Debug("Read Event")
+      log.WithFields(log.Fields{"at": hex(ip),"addr": hex(addr), "value": val, "size": size}).Info("Read Event")
       s.Config.EventHandler.ReadEvent(s,addr)
 		}
 }
 
 func hex(val uint64) string{
   return fmt.Sprintf("0x%x",val)
+}
+
+func is_ret(mem []byte) bool{
+  if mem[0] == 0xc3 {return true}
+  if (mem[0] == 0xf2 || mem[0] == 0xf3) && mem[1] == 0xc3 {return true}
+  return false
 }
 
 func (s *Emulator) addHooks() *errors.Error {
@@ -595,15 +628,19 @@ func (s *Emulator) addHooks() *errors.Error {
 	//  return wrap(err)
   //}
 
+
 	s.mu.HookAdd(uc.HOOK_CODE, func(mu uc.Unicorn, addr uint64, size uint32) {
     rax,_ := s.mu.RegRead(uc.X86_REG_RAX)
+    rsp,_ := s.mu.RegRead(uc.X86_REG_RSP)
     rip,_ := s.mu.RegRead(uc.X86_REG_RIP)
     mem,_ := s.mu.MemRead(rip, 16)
-    if mem[0] == 0xc3 { //RET instruction
+    s.last_instruction_was_ret = false
+    if is_ret(mem) { // special treatment for RET instruction 
         s.Config.EventHandler.ReturnEvent(s,rax)
-        log.WithFields(log.Fields{"at": hex(addr), "rax": hex(rax)}).Debug("Ret Event")
+        log.WithFields(log.Fields{"at": hex(addr), "rax": hex(rax)}).Info("Ret Event")
+        s.last_instruction_was_ret = true
     }
-    log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax)}).Debug("Instruction")
+    log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp)}).Debug("Instruction")
 	})
 
 	return nil

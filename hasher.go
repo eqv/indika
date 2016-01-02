@@ -16,11 +16,6 @@ import (
   "encoding/hex"
 )
 
-func init() {
-	//log.SetLevel(log.DebugLevel)
-	log.SetLevel(log.ErrorLevel)
-}
-
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
 	for rng, mapping := range maps {
 		if rng.IntersectsRange(needle) {
@@ -94,6 +89,15 @@ func pad_func_name(str string) string{
 
 func main(){
 	file := os.Args[1]
+
+	log.SetLevel(log.ErrorLevel)
+
+  fmt.Printf("%v\n",os.Args)
+
+  if len(os.Args) >=3 && os.Args[2] == "d"{
+	  log.SetLevel(log.DebugLevel)
+  }
+
 	f := ioReader(file)
 	_elf, err := elf.NewFile(f)
 	check(wrap(err))

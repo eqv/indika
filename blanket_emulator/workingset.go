@@ -7,6 +7,7 @@ import (
 )
 
 const pagesize = 4096
+const log_mem = false
 
 type WorkingSet struct {
 	mapped []uint64
@@ -23,22 +24,22 @@ func NewWorkingSet(size int) *WorkingSet {
 }
 
 func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
-	log.WithFields(log.Fields{"addr": hex(addr), "size": size}).Debug("Map Memory")
+	if log_mem { log.WithFields(log.Fields{"addr": hex(addr), "size": size}).Debug("Map Memory") }
 	alignment := (addr % pagesize)
 	base_addr := addr - alignment
-	log.WithFields(log.Fields{"base_addr": hex(base_addr), "size": uint64(pagesize)}).Debug("Map Memory called")
+	if log_mem { log.WithFields(log.Fields{"base_addr": hex(base_addr), "size": uint64(pagesize)}).Debug("Map Memory called") }
 	err := mu.MemMapProt(base_addr, uint64(pagesize), uc.PROT_READ|uc.PROT_WRITE)
 	if err != nil {
 		return wrap(err)
 	}
   mem := GetMem(base_addr, pagesize)
-  log.WithFields(log.Fields{"mem": mem[0:8]}).Debug("Memory written")
+  if log_mem { log.WithFields(log.Fields{"mem": mem[0:8]}).Debug("Memory written") }
 	err = mu.MemWrite(base_addr, mem)
   mem2,err := mu.MemRead(base_addr, pagesize)
 	if err != nil {
 		return wrap(err)
 	}
-  log.WithFields(log.Fields{"mem": mem2[0:8]}).Debug("Memory read")
+  if log_mem { log.WithFields(log.Fields{"mem": mem2[0:8]}).Debug("Memory read") }
 	if err != nil {
 		return wrap(err)
 	}
@@ -50,7 +51,7 @@ func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
 }
 
 func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) *errors.Error {
-	log.WithFields(log.Fields{"addr": addr}).Debug("Store In Working Set")
+	if log_mem { log.WithFields(log.Fields{"addr": addr}).Debug("Store In Working Set") }
 	if s.newest == -1 {
 		s.mapped[0] = addr
 		s.oldest = 0
@@ -59,7 +60,7 @@ func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) *errors.Error
 	s.newest = (s.newest + 1) % len(s.mapped)
 	if s.newest == s.oldest { // unmap old page
 		addr_to_unmap := s.mapped[s.oldest]
-		log.WithFields(log.Fields{"addr_to_unmap": addr_to_unmap}).Debug("unmap")
+		if log_mem { log.WithFields(log.Fields{"addr_to_unmap": addr_to_unmap}).Debug("unmap") }
 		err := mu.MemUnmap(addr_to_unmap, pagesize)
 		if err != nil {
 			return wrap(err)
