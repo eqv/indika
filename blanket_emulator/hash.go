@@ -52,14 +52,14 @@ func InvalidInstructionEventHash(arg1 uint64) uint64 {
 	return fast_hash(invalid_salt, arg1)
 }
 
-func GetMem(addr uint64, size int) []byte {
+func GetMem(addr uint64, size uint64, seed uint64) []byte {
 	res := make([]byte, size)
-	for i := 0; i < size; i++ {
-		res[i] = byte(fast_hash(mem_salt, addr+uint64(i)))
+	for i := uint64(0); i < size; i++ {
+		res[i] = byte(fast_hash(mem_salt+seed, addr+uint64(i)))
 	}
 	return res
 }
 
-func GetReg(index int) uint64 {
-	return fast_hash(reg_salt, uint64(index))
+func GetReg(index int, seed uint64) uint64 {
+	return fast_hash(reg_salt+seed, uint64(index))
 }

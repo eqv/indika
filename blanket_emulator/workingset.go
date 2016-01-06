@@ -23,7 +23,7 @@ func NewWorkingSet(size int) *WorkingSet {
 	return res
 }
 
-func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
+func (s *WorkingSet) Map(addr, size uint64, em *Emulator) *errors.Error {
 	if log_mem {
 		log.WithFields(log.Fields{"addr": hex(addr), "size": size}).Debug("Map Memory")
 	}
@@ -32,16 +32,16 @@ func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
 	if log_mem {
 		log.WithFields(log.Fields{"base_addr": hex(base_addr), "size": uint64(pagesize)}).Debug("Map Memory called")
 	}
-	err := mu.MemMapProt(base_addr, uint64(pagesize), uc.PROT_READ|uc.PROT_WRITE)
+	err := em.mu.MemMapProt(base_addr, uint64(pagesize), uc.PROT_READ|uc.PROT_WRITE)
 	if err != nil {
 		return wrap(err)
 	}
-	mem := GetMem(base_addr, pagesize)
+	mem := em.Env.GetMem(base_addr, pagesize)
 	if log_mem {
 		log.WithFields(log.Fields{"mem": mem[0:8]}).Debug("Memory written")
 	}
-	err = mu.MemWrite(base_addr, mem)
-	mem2, err := mu.MemRead(base_addr, pagesize)
+	err = em.mu.MemWrite(base_addr, mem)
+	mem2, err := em.mu.MemRead(base_addr, pagesize)
 	if err != nil {
 		return wrap(err)
 	}
@@ -51,9 +51,9 @@ func (s *WorkingSet) Map(addr, size uint64, mu uc.Unicorn) *errors.Error {
 	if err != nil {
 		return wrap(err)
 	}
-	s.StoreInWorkingSet(base_addr, mu)
+	s.StoreInWorkingSet(base_addr, em.mu)
 	if addr+size > base_addr+pagesize { //sometimes we might need to map 2 pages
-		s.Map(base_addr+pagesize, 1, mu) //map next pages as well
+		s.Map(base_addr+pagesize, 1, em) //map next pages as well
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
 package disassemble
 
 import (
-	"fmt"
+//	"fmt"
 	log "github.com/Sirupsen/logrus"
 	"github.com/bnagy/gapstone"
 	ds "github.com/ranmrdrakono/indika/data_structures"
@@ -36,84 +36,54 @@ func init() {
 	jmp_flags[gapstone.X86_INS_LJMP] = true
 }
 
-func Discover_basic_blocks(instrs []gapstone.Instruction) map[ds.Range]bool {
-	/* set of basic blocks */
-	var blocks = make(map[ds.Range]bool)
 
-	/* discover addresses */
-	bb_starts := search_start_addresses(instrs)
-	bb_ends := search_end_addresses(instrs, bb_starts)
-
-	/* create basic block */
-	for start, end := range bb_ends {
-		bb := ds.NewRange(start, end)
-		blocks[bb] = true
-	}
-
-	return blocks
+func makebb(ins gapstone.Instruction) *ds.BB{
+  from := uint64(ins.Address)
+  to := uint64(ins.Address)+uint64(ins.Size)
+  return ds.NewBB(from, to, make([]uint64,0))
 }
 
-func search_start_addresses(instrs []gapstone.Instruction) map[uint64]bool {
-	var bb_starts = make(map[uint64]bool)
-
-	/* first instruction in code sequence => basic block */
-	bb_starts[uint64(instrs[0].Address)] = true
-
-	for _, instr := range instrs {
-		/* jmp instruction */
-		if _, ok := jmp_flags[instr.Id]; ok {
-
-			/* jmp destination => basic block */
-			for _, op := range instr.X86.Operands {
+func get_transfer_targets( ins gapstone.Instruction) []uint64 {
+      res := make([]uint64,0)
+			for _, op := range ins.X86.Operands {
 				if op.Type == gapstone.X86_OP_IMM {
-					bb_starts[uint64(op.Imm)] = true
+          res = append(res, uint64(op.Imm))
 				}
 			}
-
 			/* instruction succeeding a jump => basic block*/
-			bb_starts[uint64(instr.Address+instr.Size)] = true
-		}
-	}
-	return bb_starts
+      res = append(res,uint64(ins.Address)+uint64(ins.Size))
+      return res
 }
 
-func search_end_addresses(instrs []gapstone.Instruction, bb_starts map[uint64]bool) map[uint64]uint64 {
-	var bb_ends = make(map[uint64]uint64)
-	var cur_bb uint64 = 0
-	var instr_counter int = 0
-	var next_addr uint64
+func search_basicblocks(ins []gapstone.Instruction) map[uint64]ds.BB{
+  res := make(map[uint64]ds.BB)
+  var curr_bb *ds.BB = nil
 
-	for _, instr := range instrs {
-		/* instruction is first instruction of a basic block*/
-		if _, ok := bb_starts[uint64(instr.Address)]; ok {
-			cur_bb = uint64(instr.Address)
-		}
+  for _, curr_instr := range ins {
+    if curr_bb == nil {
+      curr_bb = makebb(curr_instr)
+    }
+    //this is a jump instruction => add current bb
+    if _,ok := jmp_flags[curr_instr.Id]; ok {
+      curr_bb.Transfers = get_transfer_targets(curr_instr)
+      curr_bb.Rng.To = uint64(curr_instr.Address+curr_instr.Size)
+      res[curr_bb.Rng.From] = *curr_bb
+      curr_bb = nil
+    }
+  }
 
-		instr_counter += 1
-		next_addr = uint64(instr.Address + instr.Size)
-
-		/* next instruction == basic block start? */
-		_, ok := bb_starts[next_addr]
-
-		/* basic block start or last instruction in list */
-		if (instr_counter == len(instrs)) || ok {
-			bb_ends[cur_bb] = next_addr //uint64(instr.Address)
-		}
-	}
-	return bb_ends
+  //finish last basic block
+  if curr_bb != nil {
+    last_instr := ins[len(ins)-1]
+    curr_bb.Rng.To = uint64(last_instr.Address + last_instr.Size)
+    res[curr_bb.Rng.From] = *curr_bb
+  }
+  return res
 }
 
-func print_blocks(blocks map[ds.Range]bool) {
-	for block, value := range blocks {
-		if value {
-			fmt.Printf("(0x%x, 0x%x)\n", block.From, block.To)
-		}
-	}
-}
-
-func GetBasicBlocks(codeoffset uint64, code []byte, function_bounds ds.Range) map[ds.Range]bool {
+func GetBBs(codeoffset uint64, code []byte, function_bounds ds.Range) map[uint64]ds.BB {
 	if function_bounds.To-function_bounds.From < 1 {
-		return make(map[ds.Range]bool)
+		return make(map[uint64]ds.BB)
 	}
 
 	EP := function_bounds.From
@@ -139,5 +109,5 @@ func GetBasicBlocks(codeoffset uint64, code []byte, function_bounds ds.Range) ma
 		log.WithFields(log.Fields{"error": err}).Fatal("Failed to Disassemble")
 	}
 
-	return Discover_basic_blocks(instrs)
+	return search_basicblocks(instrs)
 }

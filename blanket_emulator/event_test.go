@@ -43,7 +43,7 @@ func extract_bbs(maps map[ds.Range]*ds.MappedRegion, rng ds.Range) map[ds.Range]
 	return filter_empty_bbs(blocks)
 }
 
-func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *Emulator {
+func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion, env Environment) *Emulator {
 	ev := NewEventsToMinHash()
 	config := Config{
 		MaxTraceInstructionCount: 100,
@@ -53,7 +53,7 @@ func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *Emulator {
 		Mode:                     uc.MODE_64,
 		EventHandler:             ev,
 	}
-	em := NewEmulator(mem, config)
+	em := NewEmulator(mem, config, env)
 	return em
 }
 
@@ -63,7 +63,7 @@ func TestOneInstruction(t *testing.T) {
 	base := uint64(0x40000)
 	rng := ds.NewRange(base, base+uint64(len(content)))
 	maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
-	emulator := MakeBlanketEmulator(maps)
+	emulator := MakeBlanketEmulator(maps, NewRandEnv(0))
 
 	bbs := extract_bbs(maps, rng)
 	expected_bbs := map[ds.Range]bool{ds.NewRange(base, base+uint64(len(content))): true}
@@ -91,7 +91,7 @@ func TestRun(t *testing.T) {
 	base := uint64(0x40000)
 	rng := ds.NewRange(base, base+uint64(len(content)))
 	maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
-	emulator := MakeBlanketEmulator(maps)
+	emulator := MakeBlanketEmulator(maps, NewRandEnv(0))
 
 	bbs := extract_bbs(maps, rng)
 	//expected_bbs := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}

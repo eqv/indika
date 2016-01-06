@@ -5,6 +5,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/go-errors/errors"
 	ds "github.com/ranmrdrakono/indika/data_structures"
+	"github.com/ranmrdrakono/indika/arch"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 	"sort"
 )
@@ -32,7 +33,9 @@ const resolve_static_addresses = true
 type Emulator struct {
 	CurrentTrace             *Trace
 	WorkingSet               *WorkingSet
+  Env                      Environment
 	Config                   Config
+  Events                   *EventSet
 	mu                       uc.Unicorn
 	codepages                map[uint64]([]byte)
 	binaryContentPages       map[ds.Range]bool
@@ -40,22 +43,12 @@ type Emulator struct {
 	last_instruction_was_ret bool
 }
 
-type EventHandler interface {
-	WriteEvent(em *Emulator, addr, value uint64)
-	ReadEvent(em *Emulator, addr uint64)
-	BlockEvent(em *Emulator, start_addr, end_addr uint64)
-	SyscallEvent(em *Emulator, number uint64)
-	ReturnEvent(em *Emulator, number uint64)
-	InvalidInstructionEvent(em *Emulator, addr uint64)
-}
-
 type Config struct {
 	MaxTraceInstructionCount uint64
 	MaxTraceTime             uint64
 	MaxTracePages            int
-	Arch                     int
+	Arch                     arch.Arch
 	Mode                     int
-	EventHandler             EventHandler
 }
 
 const REG_STACK = 5
@@ -71,6 +64,27 @@ func check(err *errors.Error) {
 	if err != nil && err.Err != nil {
 		log.WithFields(log.Fields{"error": err, "stack": err.ErrorStack()}).Fatal("Error creating Elf Parser")
 	}
+}
+
+
+func (s *Emulator) WriteEvent(addr, value uint64) {
+	s.Events.Add(WriteEvent{Addr: addr, Value: value})
+}
+
+func (s *Emulator) ReadEvent(addr uint64) {
+	s.Events.Add(ReadEvent(addr))
+}
+
+func (s *Emulator) SyscallEvent(number uint64) {
+	s.Events.Add(SyscallEvent(number))
+}
+
+func (s *Emulator) ReturnEvent(number uint64) {
+	s.Events.Add(ReturnEvent(number))
+}
+
+func (s *Emulator) InvalidInstructionEvent(offset uint64) {
+	s.Events.Add(InvalidInstructionEvent(offset))
 }
 
 func mapLoadableRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
@@ -91,12 +105,14 @@ func getSetOfOriginalContentPages(mem map[ds.Range]*ds.MappedRegion) map[ds.Rang
 	return res
 }
 
-func NewEmulator(mem map[ds.Range]*ds.MappedRegion, conf Config) *Emulator {
+func NewEmulator(mem map[ds.Range]*ds.MappedRegion, conf Config, env Environment) *Emulator {
 	res := new(Emulator)
 	res.Config = conf
+  res.Env = env
 	res.codepages = mapLoadableRangeToStarts(mem)
 	res.binaryContentPages = getSetOfOriginalContentPages(mem)
 	res.staticAddresses = make(map[uint64]uint64)
+  res.Events = NewEventSet()
 	return res
 }
 
@@ -104,7 +120,7 @@ func (s *Emulator) CreateUnicorn() *errors.Error {
 	if s.mu != nil {
 		s.Close()
 	}
-	mu, err2 := uc.NewUnicorn(s.Config.Arch, s.Config.Mode)
+	mu, err2 := uc.NewUnicorn(s.Config.Arch.ToUnicornArchDescription(), s.Config.Arch.ToUnicornModeDescription())
 	s.WorkingSet = NewWorkingSet(s.Config.MaxTracePages)
 	if err2 != nil {
 		return errors.Wrap(err2, 0)
@@ -173,8 +189,8 @@ func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
 	return nil
 }
 
-func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error {
-	max_blocks_number := len(blocks_to_visit) + 5
+func (s *Emulator) FullBlanket(blocks_to_visit map[uint64]ds.BB) *errors.Error {
+	max_blocks_number := len(blocks_to_visit)
 
 	for i := 0; i < max_blocks_number; i++ {
 		s.CurrentTrace = NewTrace(&blocks_to_visit)
@@ -190,6 +206,9 @@ func (s *Emulator) FullBlanket(blocks_to_visit map[ds.Range]bool) *errors.Error 
 
 		s.CurrentTrace = nil
 	}
+  if len(blocks_to_visit)== 0{
+    return nil
+  }
 	return errors.Errorf("Failed to run full blanket, remaining: %d (of %d)", len(blocks_to_visit), max_blocks_number)
 }
 
@@ -211,7 +230,7 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 			return nil
 		}
 		log.WithFields(log.Fields{"at": hex(ip)}).Info("Invalid Instruction Event")
-		s.Config.EventHandler.InvalidInstructionEvent(s, ip)
+		s.InvalidInstructionEvent(ip)
 		return nil
 	}
 	return wrap(err)
@@ -240,644 +259,45 @@ func (s *Emulator) ResetMemoryImage() *errors.Error {
 }
 
 func (s *Emulator) ResetRegisters() *errors.Error {
-	if err := s.mu.RegWrite(uc.X86_REG_RAX, GetReg(1)); err != nil {
+
+  for _,reg := range s.Config.Arch.GetRegisters() {
+    if err := s.mu.RegWrite(reg, 0); err != nil {
+      return wrap(err)
+    }
+  }
+
+	if err := s.mu.RegWrite(uc.X86_REG_RAX, s.Env.GetReg(1)); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RBX, GetReg(2)); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RBX, s.Env.GetReg(2)); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RDX, GetReg(3)); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RDX, s.Env.GetReg(3)); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RCX, GetReg(4)); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RCX, s.Env.GetReg(4)); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RSP, GetReg(REG_STACK)-GetReg(REG_STACK)%4096); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RSP, s.Env.GetReg(REG_STACK)-s.Env.GetReg(REG_STACK)%4096); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RBP, GetReg(REG_STACK)-GetReg(REG_STACK)%4096+50*8); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RBP, s.Env.GetReg(REG_STACK)-s.Env.GetReg(REG_STACK)%4096+50*8); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RSI, GetReg(7)); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RSI, s.Env.GetReg(7)); err != nil {
 		return wrap(err)
 	}
 
-	if err := s.mu.RegWrite(uc.X86_REG_RDI, GetReg(8)); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RDI, s.Env.GetReg(8)); err != nil {
 		return wrap(err)
 	}
 
-	if err := s.mu.RegWrite(uc.X86_REG_EFLAGS, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FPSW, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FS, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_GS, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_IP, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_SI, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_SIL, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_SP, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_SPL, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_SS, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR8, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR9, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR10, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR11, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR12, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR13, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR14, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_CR15, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR8, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR9, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR10, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR11, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR12, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR13, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR14, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_DR15, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FP0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FP1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FP2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FP3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FP4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FP5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FP6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_FP7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_K0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_K1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_K2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_K3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_K4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_K5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_K6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_K7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_MM0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_MM1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_MM2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_MM3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_MM4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_MM5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_MM6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_MM7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R8, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R9, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R10, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R11, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R12, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R13, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R14, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R15, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ST0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ST1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ST2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ST3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ST4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ST5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ST6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ST7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM8, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM9, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM10, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM11, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM12, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM13, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM14, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM15, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM16, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM17, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM18, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM19, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM20, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM21, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM22, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM23, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM24, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM25, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM26, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM27, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM28, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM29, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM30, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_XMM31, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM8, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM9, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM10, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM11, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM12, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM13, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM14, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM15, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM16, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM17, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM18, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM19, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM20, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM21, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM22, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM23, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM24, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM25, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM26, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM27, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM28, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM29, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM30, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_YMM31, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM0, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM1, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM2, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM3, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM4, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM5, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM6, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM7, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM8, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM9, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM10, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM11, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM12, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM13, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM14, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM15, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM16, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM17, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM18, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM19, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM20, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM21, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM22, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM23, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM24, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM25, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM26, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM27, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM28, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM29, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM30, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_ZMM31, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R8B, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R9B, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R10B, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R11B, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R12B, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R13B, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R14B, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R15B, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R8D, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R9D, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R10D, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R11D, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R12D, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R13D, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R14D, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R15D, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R8W, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R9W, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R10W, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R11W, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R12W, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R13W, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R14W, 0); err != nil {
-		return wrap(err)
-	}
-	if err := s.mu.RegWrite(uc.X86_REG_R15W, 0); err != nil {
-		return wrap(err)
-	}
 	return nil
 }
 
 func (s *Emulator) is_in_stack_frame(addr uint64) bool {
-	is_above_initial_stack := addr <= GetReg(REG_STACK)+ignore_stackframe_below_initial_stack_pointer_size
-	stack, _ := s.mu.RegRead(uc.X86_REG_RSP)
+	is_above_initial_stack := addr <= s.Env.GetReg(REG_STACK)+ignore_stackframe_below_initial_stack_pointer_size
+	stack, _ := s.mu.RegRead(s.Config.Arch.GetRegStack())
 	is_below_current_stack := addr >= stack-ignore_stackframe_above_stack_pointer_size
 	return is_above_initial_stack && is_below_current_stack
 }
@@ -912,6 +332,8 @@ func (s *Emulator) resolve_static(addr uint64) uint64 {
 	if val, ok := s.staticAddresses[addr]; ok {
 		return val
 	}
+
+  //replace address with fake elfoffset to reduce noise created by different static addresses
 	next_val := uint64(0xe1f0ff5e70000) + uint64(len(s.staticAddresses)) + 1
 	s.staticAddresses[addr] = next_val
 	return next_val
@@ -933,7 +355,7 @@ func (s *Emulator) handleMemoryEvent(access int, addr uint64, size int, ivalue i
 		}
 
 		log.WithFields(log.Fields{"at": hex(ip), "addr": hex(addr), "value": val, "size": size}).Info("Write Event")
-		s.Config.EventHandler.WriteEvent(s, addr, val)
+		s.WriteEvent(addr, val)
 	} else {
 
 		if s.should_ignore_read(addr, size) {
@@ -942,7 +364,7 @@ func (s *Emulator) handleMemoryEvent(access int, addr uint64, size int, ivalue i
 		}
 
 		log.WithFields(log.Fields{"at": hex(ip), "addr": hex(addr), "value": val, "size": size}).Info("Read Event")
-		s.Config.EventHandler.ReadEvent(s, addr)
+		s.ReadEvent( addr)
 	}
 }
 
@@ -950,47 +372,23 @@ func hex(val uint64) string {
 	return fmt.Sprintf("0x%x", val)
 }
 
-func is_ret(mem []byte) bool {
-	if mem[0] == 0xc3 {
-		return true
-	}
-	if (mem[0] == 0xf2 || mem[0] == 0xf3) && mem[1] == 0xc3 {
-		return true
-	}
-	return false
-}
-
-func (s *Emulator) addHooks() *errors.Error {
-
-	_, err := s.mu.HookAdd(uc.HOOK_BLOCK, func(mu uc.Unicorn, addr uint64, size uint32) {
+func (s *Emulator) OnBlock(addr uint64, size uint32){
 		if size < 1 {
 			log.WithFields(log.Fields{"addr": addr, "size": size}).Debug("Empty BB")
-			s.CurrentTrace.AddBlockRange(addr, addr)
+			s.CurrentTrace.AddBlockRangeVisited(addr, addr)
 		}
-		s.CurrentTrace.AddBlockRange(addr, addr+uint64(size)-1)
+		s.CurrentTrace.AddBlockRangeVisited(addr, addr+uint64(size)-1)
 		log.WithFields(log.Fields{"from": hex(addr), "to": hex(addr + uint64(size))}).Debug("BB visited")
-	})
-	if err != nil {
-		return wrap(err)
-	}
+}
 
-	_, err = s.mu.HookAdd(uc.HOOK_MEM_READ|uc.HOOK_MEM_WRITE, func(mu uc.Unicorn, access int, addr uint64, size int, value int64) {
-		s.handleMemoryEvent(access, addr, size, value)
-	})
-	if err != nil {
-		return wrap(err)
-	}
-
-	invalid := uc.HOOK_MEM_READ_INVALID | uc.HOOK_MEM_WRITE_INVALID | uc.HOOK_MEM_FETCH_INVALID
-	_, err = s.mu.HookAdd(invalid, func(mu uc.Unicorn, access int, addr uint64, size int, value int64) bool {
+func (s *Emulator) OnInvalidMem(access int, addr uint64, size int, value int64) bool {
 		log.WithFields(log.Fields{"addr": hex(addr), "size": size}).Debug("invalid memory access")
-
 		if access == uc.MEM_FETCH_UNMAPPED || access == uc.MEM_FETCH_PROT {
 			return false
 		}
 
 		if access == uc.MEM_READ_UNMAPPED || access == uc.MEM_WRITE_UNMAPPED {
-			err := s.WorkingSet.Map(addr, uint64(size), mu)
+			err := s.WorkingSet.Map(addr, uint64(size), s)
 			if err != nil {
 				log.WithFields(log.Fields{"addr": hex(addr), "size": size, "error": err, "stack": err.ErrorStack()}).Fatal("Error Mapping page")
 				return false
@@ -1004,6 +402,28 @@ func (s *Emulator) addHooks() *errors.Error {
 
 		log.WithFields(log.Fields{"addr": hex(addr), "access": access, "size": size}).Error("Unhandled Memory Error")
 		return false
+}
+
+func (s *Emulator) addHooks() *errors.Error {
+
+	_, err := s.mu.HookAdd(uc.HOOK_BLOCK, func(mu uc.Unicorn, addr uint64, size uint32) {  
+    s.OnBlock(addr, size) 
+  })
+	if err != nil {
+		return wrap(err)
+	}
+
+	_, err = s.mu.HookAdd(uc.HOOK_MEM_READ|uc.HOOK_MEM_WRITE, func(mu uc.Unicorn, access int, addr uint64, size int, value int64) {
+		s.handleMemoryEvent(access, addr, size, value)
+	})
+	if err != nil {
+		return wrap(err)
+	}
+
+	invalid := uc.HOOK_MEM_READ_INVALID | uc.HOOK_MEM_WRITE_INVALID | uc.HOOK_MEM_FETCH_INVALID
+
+	_, err = s.mu.HookAdd(invalid, func(mu uc.Unicorn, access int, addr uint64, size int, value int64) bool {
+    return s.OnInvalidMem(access, addr, size, value)
 	})
 
 	if err != nil {
@@ -1012,7 +432,7 @@ func (s *Emulator) addHooks() *errors.Error {
 
 	hook_inst_sys := func(mu uc.Unicorn) {
 		//rax, _ := mu.RegRead(uc.X86_REG_RAX)
-		//s.Config.EventHandler.SyscallEvent(s,rax)
+		//s.SyscallEvent(s,rax)
 		//log.WithFields(log.Fields{"num": rax}).Debug("Syscall/Interrupt")
 	}
 
@@ -1026,25 +446,14 @@ func (s *Emulator) addHooks() *errors.Error {
 	//	return wrap(err)
 	//}
 
-	//hook_inst_ret := func (mu uc.Unicorn){
-	//	rax, _ := mu.RegRead(uc.X86_REG_RAX)
-	//	s.Config.EventHandler.ReturnEvent(s,rax)
-	//  log.WithFields(log.Fields{"val": rax}).Debug("Return")
-	//}
-
-	//_, err = s.mu.HookAdd(uc.HOOK_INSN, hook_inst_ret, uc.X86_INS_RET)
-	//if err != nil {
-	//  return wrap(err)
-	//}
-
 	s.mu.HookAdd(uc.HOOK_CODE, func(mu uc.Unicorn, addr uint64, size uint32) {
-		rax, _ := s.mu.RegRead(uc.X86_REG_RAX)
-		rsp, _ := s.mu.RegRead(uc.X86_REG_RSP)
-		rip, _ := s.mu.RegRead(uc.X86_REG_RIP)
+		rax, _ := s.mu.RegRead(s.Config.Arch.GetRegRet())
+		rsp, _ := s.mu.RegRead(s.Config.Arch.GetRegStack())
+		rip, _ := s.mu.RegRead(s.Config.Arch.GetRegIP())
 		mem, _ := s.mu.MemRead(rip, 16)
 		s.last_instruction_was_ret = false
-		if is_ret(mem) { // special treatment for RET instruction
-			s.Config.EventHandler.ReturnEvent(s, rax)
+		if s.Config.Arch.IsRet(mem) { // special treatment for RET instruction
+			s.ReturnEvent(rax)
 			log.WithFields(log.Fields{"at": hex(addr), "rax": hex(rax)}).Info("Ret Event")
 			s.last_instruction_was_ret = true
 		}

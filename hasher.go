@@ -8,8 +8,8 @@ import (
 	be "github.com/ranmrdrakono/indika/blanket_emulator"
 	ds "github.com/ranmrdrakono/indika/data_structures"
 	"github.com/ranmrdrakono/indika/disassemble"
+	"github.com/ranmrdrakono/indika/arch"
 	loader "github.com/ranmrdrakono/indika/loader/elf"
-	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 	"io"
 	"os"
 	//	"reflect"
@@ -24,36 +24,34 @@ func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.M
 	}
 	return nil
 }
-func filter_empty_bbs(bbs map[ds.Range]bool) map[ds.Range]bool {
-	res := make(map[ds.Range]bool)
-	for rng, _ := range bbs {
-		if !rng.IsEmpty() {
-			res[rng] = true
+func filter_empty_bbs(bbs map[uint64]ds.BB) map[uint64]ds.BB {
+	res := make(map[uint64]ds.BB)
+	for addr, bb := range bbs {
+		if !bb.Rng.IsEmpty() {
+			res[addr] = bb
 		}
 	}
 	return res
 }
 
-func extract_bbs(maps map[ds.Range]*ds.MappedRegion, rng ds.Range) map[ds.Range]bool {
+func extract_bbs(maps map[ds.Range]*ds.MappedRegion, rng ds.Range) map[uint64]ds.BB {
 	maped := find_mapping_for(maps, rng)
 	if maped == nil {
 		return nil
 	}
-	blocks := disassemble.GetBasicBlocks(maped.Range.From, maped.Data, rng)
+	blocks := disassemble.GetBBs(maped.Range.From, maped.Data, rng)
 	return filter_empty_bbs(blocks)
 }
 
 func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion) *be.Emulator {
-	ev := be.NewEventsToMinHash()
 	config := be.Config{
 		MaxTraceInstructionCount: 100,
 		MaxTraceTime:             0,
 		MaxTracePages:            50,
-		Arch:                     uc.ARCH_X86,
-		Mode:                     uc.MODE_64,
-		EventHandler:             ev,
+		Arch:                     &arch.ArchX86_64{},
 	}
-	em := be.NewEmulator(mem, config)
+  env := be.NewRandEnv(0)
+	em := be.NewEmulator(mem, config, env)
 	return em
 }
 
@@ -91,6 +89,19 @@ func pad_func_name(str string) string {
 	return str + string(pad)
 }
 
+func are_we_interessted_in_this(symb *ds.Symbol) bool{
+    if symb.Type != ds.FUNC { return false }
+    if len(os.Args) > 2 {
+      for _, str := range os.Args {
+        if str == symb.Name {
+          return true
+        }
+      }
+      return false
+    }
+    return true
+}
+
 func main() {
 	file := os.Args[1]
 
@@ -106,40 +117,30 @@ func main() {
 	_elf, err := elf.NewFile(f)
 	check(wrap(err))
 	maps := loader.GetSegments(_elf)
-
 	symbols := loader.GetSymbols(_elf)
+
 	fmt.Println("done loading")
 	fmt.Printf("maps %v\n", maps)
 
 	for rng, symb := range symbols {
-		if symb.Type == ds.FUNC {
-			if len(os.Args) > 2 {
-				found := false
-				for _, str := range os.Args {
-					if str == symb.Name {
-						found = true
-					}
-				}
-				if !found {
-					continue
-				}
-			}
-			bbs := extract_bbs(maps, rng)
-			if len(bbs) == 0 {
-				continue
-			}
-			fmt.Printf("%v : ", pad_func_name(symb.Name))
-			emulator := MakeBlanketEmulator(maps)
-			err := emulator.FullBlanket(bbs)
-			if err != nil {
-				log.WithFields(log.Fields{"error": err}).Error("Error running Blanket")
-				continue
-			}
-			ev := emulator.Config.EventHandler.(*be.EventsToMinHash)
-			fmt.Printf("hash %v\n", hex.EncodeToString(ev.GetHash(32)))
-			log.WithFields(log.Fields{"events": ev.Inspect()}).Debug("Done running Blanket")
-			emulator.Close()
-			emulator = nil
-		}
+    if !are_we_interessted_in_this(symb) {
+      continue
+    }
+    bbs := extract_bbs(maps, rng)
+    if len(bbs) == 0 {
+      continue
+    }
+    fmt.Printf("%v : ", pad_func_name(symb.Name))
+    emulator := MakeBlanketEmulator(maps)
+    err := emulator.FullBlanket(bbs)
+    if err != nil {
+      log.WithFields(log.Fields{"error": err}).Error("Error running Blanket")
+      continue
+    }
+    ev := emulator.Events
+    fmt.Printf("hash %v\n", hex.EncodeToString(ev.GetHash(32)))
+    log.WithFields(log.Fields{"events": ev.Inspect()}).Debug("Done running Blanket")
+    emulator.Close()
+    emulator = nil
 	}
 }
