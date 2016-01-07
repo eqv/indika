@@ -31,7 +31,7 @@ const ignore_invalid_instructions_after_return = true
 const resolve_static_addresses = true
 
 type Emulator struct {
-	CurrentTrace             *Trace
+	Trace                    *Trace
 	WorkingSet               *WorkingSet
   Env                      Environment
 	Config                   Config
@@ -192,24 +192,24 @@ func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
 func (s *Emulator) FullBlanket(blocks_to_visit map[uint64]ds.BB) *errors.Error {
 	max_blocks_number := len(blocks_to_visit)
 
+	s.Trace = NewTrace(&blocks_to_visit)
 	for i := 0; i < max_blocks_number; i++ {
-		s.CurrentTrace = NewTrace(&blocks_to_visit)
-		addr, should_continue := s.CurrentTrace.FirstUnseenBlock()
+		bb, state := s.Trace.FirstUnseenBlock()
 
-		if !should_continue {
+		if bb == nil {
 			return nil
 		}
 
-		if err := s.RunOneTrace(addr); err != nil {
+		if err := s.RunOneTrace(bb.Rng.From, state); err != nil {
 			return wrap(err)
 		}
 
-		s.CurrentTrace = nil
 	}
-  if len(blocks_to_visit)== 0{
+  
+  if s.Trace.NumberOfUnseenBlocks() == 0{
     return nil
   }
-	return errors.Errorf("Failed to run full blanket, remaining: %d (of %d)", len(blocks_to_visit), max_blocks_number)
+	return errors.Errorf("Failed to run full blanket, remaining: %d (of %d)", s.Trace.NumberOfUnseenBlocks(), max_blocks_number)
 }
 
 func (s *Emulator) handle_emulator_error(err error) *errors.Error {
@@ -236,11 +236,15 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 	return wrap(err)
 }
 
-func (s *Emulator) RunOneTrace(addr uint64) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
+func (s *Emulator) RunOneTrace( addr uint64, state ds.State ) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
 	cerr := s.CreateUnicorn()
 	if cerr != nil {
 		return cerr
 	}
+  if state != nil {
+    err := state.Apply(&s.mu)
+    if err != nil {return nil}
+  }
 
 	log.WithFields(log.Fields{"addr": hex(addr)}).Debug("Run One Trace")
 	opt := uc.UcOptions{Timeout: s.Config.MaxTraceTime, Count: s.Config.MaxTraceInstructionCount}
@@ -324,6 +328,10 @@ func (s *Emulator) isStaticAddr(addr uint64) bool {
 	return false
 }
 
+func (s *Emulator) DumpState() ds.State {
+  return nil
+}
+
 func (s *Emulator) resolve_static(addr uint64) uint64 {
 	if !s.isStaticAddr(addr) {
 		return addr
@@ -375,9 +383,9 @@ func hex(val uint64) string {
 func (s *Emulator) OnBlock(addr uint64, size uint32){
 		if size < 1 {
 			log.WithFields(log.Fields{"addr": addr, "size": size}).Debug("Empty BB")
-			s.CurrentTrace.AddBlockRangeVisited(addr, addr)
+			s.Trace.AddBlockRangeVisited(addr, addr)
 		}
-		s.CurrentTrace.AddBlockRangeVisited(addr, addr+uint64(size)-1)
+		s.Trace.AddBlockRangeVisited(addr, addr+uint64(size)-1)
 		log.WithFields(log.Fields{"from": hex(addr), "to": hex(addr + uint64(size))}).Debug("BB visited")
 }
 
@@ -403,6 +411,26 @@ func (s *Emulator) OnInvalidMem(access int, addr uint64, size int, value int64) 
 		log.WithFields(log.Fields{"addr": hex(addr), "access": access, "size": size}).Error("Unhandled Memory Error")
 		return false
 }
+
+
+  func (s* Emulator) OnInstruction(addr uint64, size uint32) {
+		rax, _ := s.mu.RegRead(s.Config.Arch.GetRegRet())
+		rsp, _ := s.mu.RegRead(s.Config.Arch.GetRegStack())
+		rip, _ := s.mu.RegRead(s.Config.Arch.GetRegIP())
+		mem, _ := s.mu.MemRead(rip, 16)
+		s.last_instruction_was_ret = false
+
+		if s.Config.Arch.IsRet(mem) { // special treatment for RET instruction
+			s.ReturnEvent(rax)
+			log.WithFields(log.Fields{"at": hex(addr), "rax": hex(rax)}).Info("Ret Event")
+			s.last_instruction_was_ret = true
+		}
+
+		log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp)}).Debug("Instruction")
+    s.Trace.DumpStateIfEndOfBB(s, addr, size)
+  }
+
+
 
 func (s *Emulator) addHooks() *errors.Error {
 
@@ -445,20 +473,7 @@ func (s *Emulator) addHooks() *errors.Error {
 	//if err != nil {
 	//	return wrap(err)
 	//}
+  _,err = s.mu.HookAdd(uc.HOOK_CODE, func(mu uc.Unicorn, addr uint64, size uint32) { s.OnInstruction(addr, size) })
 
-	s.mu.HookAdd(uc.HOOK_CODE, func(mu uc.Unicorn, addr uint64, size uint32) {
-		rax, _ := s.mu.RegRead(s.Config.Arch.GetRegRet())
-		rsp, _ := s.mu.RegRead(s.Config.Arch.GetRegStack())
-		rip, _ := s.mu.RegRead(s.Config.Arch.GetRegIP())
-		mem, _ := s.mu.MemRead(rip, 16)
-		s.last_instruction_was_ret = false
-		if s.Config.Arch.IsRet(mem) { // special treatment for RET instruction
-			s.ReturnEvent(rax)
-			log.WithFields(log.Fields{"at": hex(addr), "rax": hex(rax)}).Info("Ret Event")
-			s.last_instruction_was_ret = true
-		}
-		log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp)}).Debug("Instruction")
-	})
-
-	return nil
+	return wrap(err)
 }
