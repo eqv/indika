@@ -4,3 +4,4 @@ mov rax,[rax]
 mov rax,[rax]
 mov [rbx],rax
 syscall
+ret

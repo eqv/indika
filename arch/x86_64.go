@@ -18,7 +18,7 @@ func (s *ArchX86_64) IsRet(mem []byte) bool {
 	if mem[0] == 0xc3 {
 		return true
 	}
-	if (mem[0] == 0xf2 || mem[0] == 0xf3) && mem[1] == 0xc3 {
+	if (mem[0] == 0xf2 || mem[0] == 0xf3) && len(mem)>1 && mem[1] == 0xc3 {
 		return true
 	}
 	return false

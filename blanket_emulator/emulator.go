@@ -88,12 +88,16 @@ func (s *Emulator) InvalidInstructionEvent(offset uint64) {
 }
 
 func mapLoadableRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
+
+  log.WithFields(log.Fields{"mem": mem}).Debug("Init Memory Image")
 	res := make(map[uint64][]byte)
 	for key, val := range mem {
 		if val.Loaded {
 			res[key.From] = (*val).Data
 		}
 	}
+
+  log.WithFields(log.Fields{"maps": res}).Debug("Init Memory Image")
 	return res
 }
 
@@ -258,7 +262,7 @@ func (s *Emulator) ResetWorkingSet() *errors.Error {
 }
 
 func (s *Emulator) ResetMemoryImage() *errors.Error {
-	log.Debug("Reset Memory Image")
+  log.WithFields(log.Fields{"maps": s.codepages}).Debug("Rewirte Memory Image")
 	return s.WriteMemory(s.codepages)
 }
 
@@ -417,7 +421,7 @@ func (s *Emulator) OnInvalidMem(access int, addr uint64, size int, value int64) 
 		rax, _ := s.mu.RegRead(s.Config.Arch.GetRegRet())
 		rsp, _ := s.mu.RegRead(s.Config.Arch.GetRegStack())
 		rip, _ := s.mu.RegRead(s.Config.Arch.GetRegIP())
-		mem, _ := s.mu.MemRead(rip, 16)
+		mem, _ := s.mu.MemRead(rip, uint64(size))
 		s.last_instruction_was_ret = false
 
 		if s.Config.Arch.IsRet(mem) { // special treatment for RET instruction
@@ -426,7 +430,7 @@ func (s *Emulator) OnInvalidMem(access int, addr uint64, size int, value int64) 
 			s.last_instruction_was_ret = true
 		}
 
-		log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp)}).Debug("Instruction")
+    log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp), "dmp": mem}).Debug("Instruction")
     s.Trace.DumpStateIfEndOfBB(s, addr, size)
   }
 

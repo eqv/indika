@@ -5,14 +5,15 @@ import (
 	log "github.com/Sirupsen/logrus"
 	ds "github.com/ranmrdrakono/indika/data_structures"
 	"github.com/ranmrdrakono/indika/disassemble"
-	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
+	"github.com/ranmrdrakono/indika/arch"
+  "encoding/binary"
 	"reflect"
 	"testing"
 )
 
 func init() {
-	log.SetLevel(log.DebugLevel)
-	//log.SetLevel(log.ErrorLevel)
+	//log.SetLevel(log.DebugLevel)
+	log.SetLevel(log.ErrorLevel)
 }
 
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
@@ -23,35 +24,32 @@ func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.M
 	}
 	return nil
 }
-func filter_empty_bbs(bbs map[ds.Range]bool) map[ds.Range]bool {
-	res := make(map[ds.Range]bool)
-	for rng, _ := range bbs {
-		if !rng.IsEmpty() {
-			res[rng] = true
+
+func filter_empty_bbs(bbs map[uint64]ds.BB) map[uint64]ds.BB {
+	res := make(map[uint64]ds.BB)
+	for addr, bb := range bbs {
+		if !bb.Rng.IsEmpty() {
+			res[addr] = bb
 		}
 	}
 	return res
 }
 
-func extract_bbs(maps map[ds.Range]*ds.MappedRegion, rng ds.Range) map[ds.Range]bool {
+func extract_bbs(maps map[ds.Range]*ds.MappedRegion, rng ds.Range) map[uint64]ds.BB {
 	maped := find_mapping_for(maps, rng)
 	if maped == nil {
 		return nil
 	}
-	blocks := disassemble.GetBasicBlocks(maped.Range.From, maped.Data, rng)
-	fmt.Println("BBS without filter:", blocks, rng)
+	blocks := disassemble.GetBBs(maped.Range.From, maped.Data, rng)
 	return filter_empty_bbs(blocks)
 }
 
 func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion, env Environment) *Emulator {
-	ev := NewEventsToMinHash()
 	config := Config{
 		MaxTraceInstructionCount: 100,
 		MaxTraceTime:             0,
 		MaxTracePages:            100,
-		Arch:                     uc.ARCH_X86,
-		Mode:                     uc.MODE_64,
-		EventHandler:             ev,
+		Arch:                     &arch.ArchX86_64{},
 	}
 	em := NewEmulator(mem, config, env)
 	return em
@@ -59,39 +57,43 @@ func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion, env Environment) *Em
 
 func TestOneInstruction(t *testing.T) {
 	maps := make(map[ds.Range]*ds.MappedRegion)
-	content := "\x48\x8b\x00"
+  content := "H\x8B\x00\xC3"
 	base := uint64(0x40000)
 	rng := ds.NewRange(base, base+uint64(len(content)))
 	maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
-	emulator := MakeBlanketEmulator(maps, NewRandEnv(0))
+  env := NewRandEnv(0)
+	emulator := MakeBlanketEmulator(maps, env)
 
 	bbs := extract_bbs(maps, rng)
-	expected_bbs := map[ds.Range]bool{ds.NewRange(base, base+uint64(len(content))): true}
+  expected_bbs := map[uint64]ds.BB{base: *ds.NewBB(base, base+uint64(len(content)), []uint64{}) }
 	if !reflect.DeepEqual(bbs, expected_bbs) {
-		fmt.Printf("disassembly failure")
+    fmt.Printf("disassembly failure, Should be:\n%#v\nIs       :\n%#v\n", expected_bbs, bbs)
+    t.Fail()
 	}
-	fmt.Println("BBS: %v %v", len(bbs), bbs)
 	err := emulator.FullBlanket(bbs)
 	if err != nil {
-		log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
+		log.WithFields(log.Fields{"error": err}).Error("Error running Blanket")
+    t.Fail()
 	}
-	ev := emulator.Config.EventHandler.(*EventsToMinHash)
-	fmt.Println("events for single instruction %v", ev.Inspect())
+  ev := emulator.Events
+  rax := env.GetReg(1)
+  mem := binary.LittleEndian.Uint64( env.GetMem(rax,8) )
+  expected_events:= EventSet{ReadEvent(rax):true, ReturnEvent(mem):true}
 
-	//expected_events := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
-	//ev := emulator.Config.EventHandler.(*EventsToMinHash)
-	//if !reflect.DeepEqual(bbs, expected_bbs) {
-	//	fmt.Printf("disassembly failure")
-	//}
+	if !reflect.DeepEqual(ev, &expected_events) {
+		fmt.Printf("disassembly failure\n%#v\n%#v", *ev, expected_events)
+    t.Fail()
+	}
 }
 
 func TestRun(t *testing.T) {
 	maps := make(map[ds.Range]*ds.MappedRegion)
-	content := "\x48\x8b\x00\x48\x8b\x00\x48\x8b\x00\x48\x89\x03\xcd\x50"
+  content := "H\x8B\x00H\x8B\x00H\x8B\x00H\x89\x03\x0F\x05\xC3"
 	base := uint64(0x40000)
 	rng := ds.NewRange(base, base+uint64(len(content)))
 	maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
-	emulator := MakeBlanketEmulator(maps, NewRandEnv(0))
+  env := NewRandEnv(0)
+	emulator := MakeBlanketEmulator(maps, env)
 
 	bbs := extract_bbs(maps, rng)
 	//expected_bbs := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
@@ -102,6 +104,17 @@ func TestRun(t *testing.T) {
 	if err != nil {
 		log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
 	}
-	ev := emulator.Config.EventHandler.(*EventsToMinHash)
-	fmt.Println("events for single BB %v", ev.Inspect())
+
+  rax := env.GetReg(1)
+  mem1 := binary.LittleEndian.Uint64( env.GetMem(rax,8) )
+  mem2 := binary.LittleEndian.Uint64( env.GetMem(mem1,8) )
+  mem3 := binary.LittleEndian.Uint64( env.GetMem(mem2,8) )
+  rbx := env.GetReg(2)
+  expected_events:= EventSet{ReadEvent(rax):true, ReadEvent(mem1):true, ReadEvent(mem2):true, WriteEvent{Addr: rbx,
+  Value: mem3}:true, ReturnEvent(mem3):true}
+  ev := emulator.Events
+	if !reflect.DeepEqual(ev, &expected_events) {
+		fmt.Printf("disassembly failure\n%#v\n%#v", *ev, expected_events)
+    t.Fail()
+	}
 }

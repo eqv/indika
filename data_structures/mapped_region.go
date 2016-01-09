@@ -16,5 +16,5 @@ type MappedRegion struct {
 }
 
 func NewMappedRegion(data []byte, flags PageFlags, rng Range) *MappedRegion {
-	return &MappedRegion{Data: data, Flags: flags, Range: rng}
+  return &MappedRegion{Data: data, Flags: flags, Range: rng, Loaded: true}
 }
