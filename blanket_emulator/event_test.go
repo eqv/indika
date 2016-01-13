@@ -9,11 +9,13 @@ import (
   "encoding/binary"
 	"reflect"
 	"testing"
+  "github.com/davecheney/profile"
 )
 
 func init() {
-	//log.SetLevel(log.DebugLevel)
-	log.SetLevel(log.ErrorLevel)
+	log.SetLevel(log.DebugLevel)
+	//log.SetLevel(log.ErrorLevel)
+  
 }
 
 func find_mapping_for(maps map[ds.Range]*ds.MappedRegion, needle ds.Range) *ds.MappedRegion {
@@ -56,6 +58,7 @@ func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion, env Environment) *Em
 }
 
 func TestOneInstruction(t *testing.T) {
+  defer profile.Start(profile.CPUProfile).Stop()
 	maps := make(map[ds.Range]*ds.MappedRegion)
   content := "H\x8B\x00\xC3"
 	base := uint64(0x40000)

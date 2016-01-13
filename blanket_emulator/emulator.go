@@ -60,6 +60,16 @@ func wrap(err error) *errors.Error {
 	return nil
 }
 
+func maps_to_ranges(mem map[ds.Range]*ds.MappedRegion) []ds.Range {
+  res := make([]ds.Range, len(mem))
+  i := 0
+  for rng,_ := range mem {
+    res[i] = rng
+    i+=1
+  }
+  return res
+}
+
 func check(err *errors.Error) {
 	if err != nil && err.Err != nil {
 		log.WithFields(log.Fields{"error": err, "stack": err.ErrorStack()}).Fatal("Error creating Elf Parser")
@@ -88,16 +98,13 @@ func (s *Emulator) InvalidInstructionEvent(offset uint64) {
 }
 
 func mapLoadableRangeToStarts(mem map[ds.Range]*ds.MappedRegion) map[uint64][]byte {
-
-  log.WithFields(log.Fields{"mem": mem}).Debug("Init Memory Image")
+  log.WithFields(log.Fields{"maps": maps_to_ranges(mem)}).Debug("Init Memory Image")
 	res := make(map[uint64][]byte)
 	for key, val := range mem {
 		if val.Loaded {
 			res[key.From] = (*val).Data
 		}
 	}
-
-  log.WithFields(log.Fields{"maps": res}).Debug("Init Memory Image")
 	return res
 }
 
@@ -170,10 +177,8 @@ func get_addresses_from_codepages(codepages map[uint64]([]byte)) []uint64 {
 	return res
 }
 
-func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
-	for _, addr := range get_addresses_from_codepages(codepages) {
-		val := codepages[addr]
-		data_end := addr + uint64(len(val))
+func (s *Emulator) MapPageForRange(addr uint64, length uint64) *errors.Error {
+		data_end := addr + uint64(length)
 		page_start := addr - (addr % pagesize)
 		page_end := data_end + 4096 - data_end%4096
 		page_size := page_end - page_start
@@ -182,15 +187,65 @@ func (s *Emulator) WriteMemory(codepages map[uint64]([]byte)) *errors.Error {
 		if err := s.mu.MemMapProt(page_start, page_size, uc.PROT_WRITE); err != nil {
 			return wrap(err)
 		}
+    return nil
+}
+
+func (s *Emulator) PagesFor(addr uint64, length uint64) (uint64,uint64) {
+		data_end := addr + uint64(length)
+		page_start := addr - (addr % pagesize)
+		page_end := data_end + 4096 - data_end%4096
+    return page_start, page_end
+}
+
+func (s *Emulator) MemProtectForRange(addr uint64, length uint64, perms int) *errors.Error {
+		page_start, page_end := s.PagesFor(addr, length)
+		page_size := page_end - page_start
+		if err := s.mu.MemProtect(page_start, page_size, perms); err != nil {
+			return wrap(err)
+		}
+    return nil
+}
+
+func (s *Emulator) WriteMemory(addr uint64, val []byte) *errors.Error{
 		log.WithFields(log.Fields{"addr": hex(addr), "length": len(val)}).Debug("Write Memory Content")
+    if err := s.MapPageForRange(addr, uint64(len(val))); err != nil{
+      return err
+    }
 		if err := s.mu.MemWrite(addr, val); err != nil {
 			return wrap(err)
 		}
-		if err := s.mu.MemProtect(page_start, page_size, uc.PROT_READ|uc.PROT_EXEC); err != nil {
-			return wrap(err)
-		}
+    if err := s.MemProtectForRange(addr, uint64(len(val)), uc.PROT_READ|uc.PROT_EXEC); err != nil{
+      return err
+    }
+    return nil
+}
+
+func (s *Emulator) WriteMemoryMap(codepages map[uint64]([]byte)) *errors.Error {
+	for _, addr := range get_addresses_from_codepages(codepages) {
+		val := codepages[addr]
+    if err := s.WriteMemory(addr, val); err != nil {
+      return err
+    }
 	}
 	return nil
+}
+
+func (s *Emulator) InitPage(page uint64) *errors.Error{
+  return (*s.WorkingSet).Map(page,pagesize, s)
+}
+
+func (s *Emulator) ReadMemory(addr uint64, size uint64) ([]byte, *errors.Error) {
+  page_start, page_end := s.PagesFor(addr, size)
+  for page := page_start ; page_start < page_end; page+=pagesize {
+    if err,_ := s.mu.MemRead(page, 1); err != nil {
+      s.InitPage(page)
+    }
+  }
+  mem, err := s.mu.MemRead(page_start, page_end - page_start)
+  if err!= nil {
+    return nil, wrap(err)
+  }
+  return mem, nil
 }
 
 func (s *Emulator) FullBlanket(blocks_to_visit map[uint64]ds.BB) *errors.Error {
@@ -240,13 +295,13 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 	return wrap(err)
 }
 
-func (s *Emulator) RunOneTrace( addr uint64, state ds.State ) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
+func (s *Emulator) RunOneTrace( addr uint64, state *State ) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
 	cerr := s.CreateUnicorn()
 	if cerr != nil {
 		return cerr
 	}
   if state != nil {
-    err := state.Apply(&s.mu)
+    err := (*state).Apply(s)
     if err != nil {return nil}
   }
 
@@ -262,8 +317,8 @@ func (s *Emulator) ResetWorkingSet() *errors.Error {
 }
 
 func (s *Emulator) ResetMemoryImage() *errors.Error {
-  log.WithFields(log.Fields{"maps": s.codepages}).Debug("Rewirte Memory Image")
-	return s.WriteMemory(s.codepages)
+  log.Debug("Rewrite Memory Image")
+	return s.WriteMemoryMap(s.codepages)
 }
 
 func (s *Emulator) ResetRegisters() *errors.Error {
@@ -332,8 +387,9 @@ func (s *Emulator) isStaticAddr(addr uint64) bool {
 	return false
 }
 
-func (s *Emulator) DumpState() ds.State {
-  return nil
+func (s *Emulator) DumpState() (*State,*errors.Error) {
+  st,e := NewState(s)
+  return  st,e
 }
 
 func (s *Emulator) resolve_static(addr uint64) uint64 {

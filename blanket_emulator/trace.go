@@ -2,19 +2,20 @@ package blanket_emulator
 
 import (
 	ds "github.com/ranmrdrakono/indika/data_structures"
+	"github.com/go-errors/errors"
 )
 
 type Trace struct {
 	blocks_to_visit map[uint64]*ds.BB
 	end_addr_to_blocks map[uint64]*ds.BB
-  blocks_to_states map[uint64]ds.State
+  blocks_to_states map[uint64]*State
 }
 
 func NewTrace(blocks_to_visit *map[uint64]ds.BB) *Trace {
 	t := new(Trace)
 	t.blocks_to_visit  = make(map[uint64]*ds.BB)
 	t.end_addr_to_blocks  = make(map[uint64]*ds.BB)
-  t.blocks_to_states = make(map[uint64]ds.State)
+  t.blocks_to_states = make(map[uint64]*State)
   for addr,_ := range *blocks_to_visit {
     bb  := (*blocks_to_visit)[addr] //avoid taking pointer to the temporary copy created by range
     t.blocks_to_visit[addr] = &bb
@@ -32,9 +33,9 @@ func (s *Trace) AddBlockRangeVisited(from, to uint64) {
 	}
 }
 
-func (s *Trace) FirstUnseenBlock() (*ds.BB, ds.State) {
+func (s *Trace) FirstUnseenBlock() (*ds.BB, *State) {
   var best_bb *ds.BB = nil
-  var best_state ds.State = nil
+  var best_state *State = nil
 
 	for _,bb := range s.blocks_to_visit {
     state,ok := s.blocks_to_states[bb.Rng.From]
@@ -55,15 +56,19 @@ func (s *Trace) FirstUnseenBlock() (*ds.BB, ds.State) {
   return best_bb, nil
 }
 
-func (s *Trace) DumpStateIfEndOfBB(em *Emulator, addr uint64, size uint32){
+func (s *Trace) DumpStateIfEndOfBB(em *Emulator, addr uint64, size uint32) *errors.Error{
   if bb,ok := s.end_addr_to_blocks[addr+uint64(size)]; ok {
-    state := em.DumpState()
+    state, err := em.DumpState()
+    if err != nil {
+      return err
+    }
     for _,addr := range bb.Transfers {
       if _,ok := s.blocks_to_states[addr] ; !ok{
         s.blocks_to_states[addr] = state
       }
     }
   }
+  return nil
 }
 
 func (s *Trace) NumberOfUnseenBlocks() int {
