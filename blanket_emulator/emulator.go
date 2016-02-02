@@ -5,6 +5,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/go-errors/errors"
 	ds "github.com/ranmrdrakono/indika/data_structures"
+	disasm "github.com/ranmrdrakono/indika/disassemble"
 	"github.com/ranmrdrakono/indika/arch"
 	uc "github.com/unicorn-engine/unicorn/bindings/go/unicorn"
 	"sort"
@@ -235,13 +236,13 @@ func (s *Emulator) InitPage(page uint64) *errors.Error{
 }
 
 func (s *Emulator) ReadMemory(addr uint64, size uint64) ([]byte, *errors.Error) {
-  page_start, page_end := s.PagesFor(addr, size)
-  for page := page_start ; page_start < page_end; page+=pagesize {
+  first_page, last_page := s.PagesFor(addr, size)
+  for page := first_page ; page <= last_page; page+=pagesize {
     if err,_ := s.mu.MemRead(page, 1); err != nil {
       s.InitPage(page)
     }
   }
-  mem, err := s.mu.MemRead(page_start, page_end - page_start)
+  mem, err := s.mu.MemRead(addr, size)
   if err!= nil {
     return nil, wrap(err)
   }
@@ -388,7 +389,7 @@ func (s *Emulator) isStaticAddr(addr uint64) bool {
 }
 
 func (s *Emulator) DumpState() (*State,*errors.Error) {
-  st,e := NewState(s)
+  st,e := ExtractState(s)
   return  st,e
 }
 
@@ -477,6 +478,10 @@ func (s *Emulator) OnInvalidMem(access int, addr uint64, size int, value int64) 
 		rax, _ := s.mu.RegRead(s.Config.Arch.GetRegRet())
 		rsp, _ := s.mu.RegRead(s.Config.Arch.GetRegStack())
 		rip, _ := s.mu.RegRead(s.Config.Arch.GetRegIP())
+    if size <0 || size > 64 {
+      log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp)}).Fatal("Oversized Instruction")
+      size = 64
+    }
 		mem, _ := s.mu.MemRead(rip, uint64(size))
 		s.last_instruction_was_ret = false
 
@@ -485,8 +490,8 @@ func (s *Emulator) OnInvalidMem(access int, addr uint64, size int, value int64) 
 			log.WithFields(log.Fields{"at": hex(addr), "rax": hex(rax)}).Info("Ret Event")
 			s.last_instruction_was_ret = true
 		}
-
-    log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp), "dmp": mem}).Debug("Instruction")
+    log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp), "dmp":
+    disasm.InspectMemory(addr, mem)}).Debug("Instruction")
     s.Trace.DumpStateIfEndOfBB(s, addr, size)
   }
 

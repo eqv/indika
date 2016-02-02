@@ -5,6 +5,7 @@ import (
 	log "github.com/Sirupsen/logrus"
 	"github.com/bnagy/gapstone"
 	ds "github.com/ranmrdrakono/indika/data_structures"
+  "fmt"
 )
 
 /* jump instructions */
@@ -110,4 +111,17 @@ func GetBBs(codeoffset uint64, code []byte, function_bounds ds.Range) map[uint64
 	}
 
 	return search_basicblocks(instrs)
+}
+
+func InspectMemory(addr uint64, code[]byte) string {
+  engine, err := gapstone.New(gapstone.CS_ARCH_X86, gapstone.CS_MODE_64)
+  if err != nil {
+    return "DA Fail: "+err.Error()
+  }
+	instrs, err := engine.Disasm(code, addr, 0)
+  if err != nil {
+    return "DA Fail: "+err.Error()
+  }
+  ins := instrs[0]
+  return fmt.Sprintf("%s %s",ins.Mnemonic, ins.OpStr)
 }

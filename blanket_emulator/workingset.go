@@ -7,7 +7,7 @@ import (
 )
 
 const pagesize = 4096
-const log_mem = false
+const log_mem = true
 
 type WorkingSet struct {
 	mapped []uint64

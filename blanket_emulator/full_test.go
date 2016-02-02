@@ -9,7 +9,7 @@ import (
   "encoding/binary"
 	"reflect"
 	"testing"
-  "github.com/davecheney/profile"
+  "io/ioutil"
 )
 
 func init() {
@@ -57,31 +57,36 @@ func MakeBlanketEmulator(mem map[ds.Range]*ds.MappedRegion, env Environment) *Em
 	return em
 }
 
-func TestOneInstruction(t *testing.T) {
-  defer profile.Start(profile.CPUProfile).Stop()
-	maps := make(map[ds.Range]*ds.MappedRegion)
-  content := "H\x8B\x00\xC3"
-	base := uint64(0x40000)
-	rng := ds.NewRange(base, base+uint64(len(content)))
+func ReadFull(t *testing.T, filename string) []byte {
+    data,err := ioutil.ReadFile(filename)
+    if err!= nil {
+      log.WithFields(log.Fields{"error": err, "filename": filename}).Error("Error Reading example")
+      t.Fail()
+    }
+    return data
+}
+
+func RunRawContent(t *testing.T, offset uint64, content []byte, env Environment,  maps map[ds.Range]*ds.MappedRegion, expected_bbs map[uint64]ds.BB, expected_events EventSet) {
+	rng := ds.NewRange(offset, offset+uint64(len(content)))
 	maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
-  env := NewRandEnv(0)
+
 	emulator := MakeBlanketEmulator(maps, env)
 
 	bbs := extract_bbs(maps, rng)
-  expected_bbs := map[uint64]ds.BB{base: *ds.NewBB(base, base+uint64(len(content)), []uint64{}) }
+
 	if !reflect.DeepEqual(bbs, expected_bbs) {
     fmt.Printf("disassembly failure, Should be:\n%#v\nIs       :\n%#v\n", expected_bbs, bbs)
     t.Fail()
 	}
+
 	err := emulator.FullBlanket(bbs)
+
 	if err != nil {
 		log.WithFields(log.Fields{"error": err}).Error("Error running Blanket")
     t.Fail()
 	}
+
   ev := emulator.Events
-  rax := env.GetReg(1)
-  mem := binary.LittleEndian.Uint64( env.GetMem(rax,8) )
-  expected_events:= EventSet{ReadEvent(rax):true, ReturnEvent(mem):true}
 
 	if !reflect.DeepEqual(ev, &expected_events) {
 		fmt.Printf("disassembly failure\n%#v\n%#v", *ev, expected_events)
@@ -89,35 +94,36 @@ func TestOneInstruction(t *testing.T) {
 	}
 }
 
-func TestRun(t *testing.T) {
-	maps := make(map[ds.Range]*ds.MappedRegion)
-  content := "H\x8B\x00H\x8B\x00H\x8B\x00H\x89\x03\x0F\x05\xC3"
-	base := uint64(0x40000)
-	rng := ds.NewRange(base, base+uint64(len(content)))
-	maps[rng] = ds.NewMappedRegion([]byte(content), ds.R|ds.X, rng)
-  env := NewRandEnv(0)
-	emulator := MakeBlanketEmulator(maps, env)
 
-	bbs := extract_bbs(maps, rng)
-	//expected_bbs := map[ds.Range]bool{ds.NewRange(4195607, 4195626): true, ds.NewRange(4195631, 4195644): true, ds.NewRange(4195646, 4195664): true, ds.NewRange(4195669, 4195678): true, ds.NewRange(4195680, 4195681): true}
-	//if !reflect.DeepEqual(bbs, expected_bbs) {
-	//	fmt.Printf("disassembly failure")
-	//}
-	err := emulator.FullBlanket(bbs)
-	if err != nil {
-		log.WithFields(log.Fields{"error": err}).Fatal("Error running Blanket")
-	}
+func TestOneInstruction(t *testing.T) {
+  filename := "../samples/simple/one_instr"
+  content :=  ReadFull(t, filename)
+  env := NewRandEnv(0)
+
+	base := uint64(0x40000)
+  expected_bbs := map[uint64]ds.BB{base: *ds.NewBB(base, base+uint64(len(content)), []uint64{}) }
+
+  rax := env.GetReg(1)
+  mem := binary.LittleEndian.Uint64( env.GetMem(rax,8) )
+  expected_events:= EventSet{ReadEvent(rax):true, ReturnEvent(mem):true}
+  RunRawContent(t, base, content, env, make(map[ds.Range]*ds.MappedRegion), expected_bbs, expected_events)
+}
+
+func TestRun(t *testing.T) {
+  filename :=  "../samples/simple/one_bb"
+  content :=  ReadFull(t, filename)
+  env := NewRandEnv(0)
+
+	base := uint64(0x40000)
+  bb1 := ds.NewBB(base, base+uint64(len(content)), []uint64{})
+  expected_bbs := map[uint64]ds.BB{bb1.Rng.From: *bb1}
+
 
   rax := env.GetReg(1)
   mem1 := binary.LittleEndian.Uint64( env.GetMem(rax,8) )
   mem2 := binary.LittleEndian.Uint64( env.GetMem(mem1,8) )
   mem3 := binary.LittleEndian.Uint64( env.GetMem(mem2,8) )
   rbx := env.GetReg(2)
-  expected_events:= EventSet{ReadEvent(rax):true, ReadEvent(mem1):true, ReadEvent(mem2):true, WriteEvent{Addr: rbx,
-  Value: mem3}:true, ReturnEvent(mem3):true}
-  ev := emulator.Events
-	if !reflect.DeepEqual(ev, &expected_events) {
-		fmt.Printf("disassembly failure\n%#v\n%#v", *ev, expected_events)
-    t.Fail()
-	}
+  expected_events:= EventSet{ReadEvent(rax):true, ReadEvent(mem1):true, ReadEvent(mem2):true, WriteEvent{Addr: rbx, Value: mem3}:true, ReturnEvent(mem3):true}
+  RunRawContent(t, base,content, env, make(map[ds.Range]*ds.MappedRegion), expected_bbs, expected_events)
 }
