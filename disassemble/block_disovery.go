@@ -37,9 +37,32 @@ func init() {
 	jmp_flags[gapstone.X86_INS_JMP] = true
 	jmp_flags[gapstone.X86_INS_LJMP] = true
 	jmp_flags[gapstone.X86_INS_RET] = true
-  jmp_no_return_flags[gapstone.X86_INS_RET] = true
-	jmp_no_return_flags[gapstone.X86_INS_JMP] = true
-	jmp_no_return_flags[gapstone.X86_INS_LJMP] = true
+	jmp_flags[gapstone.X86_INS_RETF] = true
+}
+
+func is_transfer(ins gapstone.Instruction) bool {
+  _,ok := jmp_flags[ins.Id]
+  return ok
+}
+
+func has_target(ins gapstone.Instruction) bool {
+  switch ins.Id {
+    case gapstone.X86_INS_RET, gapstone.X86_INS_RETF: 
+      return false
+    default: 
+      return true
+  }
+}
+
+func has_skip_transfer(ins gapstone.Instruction) bool {
+  switch ins.Id {
+    case gapstone.X86_INS_RET, gapstone.X86_INS_RETF: 
+      return false
+    case gapstone.X86_INS_JMP, gapstone.X86_INS_LJMP: 
+      return false
+    default: 
+      return true
+  }
 }
 
 
@@ -51,12 +74,14 @@ func makebb(ins gapstone.Instruction) *ds.BB{
 
 func get_transfer_targets( ins gapstone.Instruction) []uint64 {
       res := make([]uint64,0)
-			for _, op := range ins.X86.Operands {
-				if op.Type == gapstone.X86_OP_IMM {
-          res = append(res, uint64(op.Imm))
-				}
-			}
-      if _,ok := jmp_no_return_flags[ins.Id]; !ok {
+      if has_target(ins){
+        for _, op := range ins.X86.Operands {
+          if op.Type == gapstone.X86_OP_IMM {
+            res = append(res, uint64(op.Imm))
+          }
+        }
+      }
+      if has_skip_transfer(ins){
 			/* instruction succeeding a jump => new basic block*/
         res = append(res,uint64(ins.Address)+uint64(ins.Size))
       }
@@ -72,7 +97,7 @@ func search_basicblocks(ins []gapstone.Instruction) map[uint64]ds.BB{
       curr_bb = makebb(curr_instr)
     }
     //this is a jump instruction => add current bb
-    if _,ok := jmp_flags[curr_instr.Id]; ok {
+    if is_transfer(curr_instr) {
       curr_bb.Transfers = get_transfer_targets(curr_instr)
       curr_bb.Rng.To = uint64(curr_instr.Address+curr_instr.Size)
       res[curr_bb.Rng.From] = *curr_bb
