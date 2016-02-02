@@ -60,7 +60,7 @@ func (s *WorkingSet) Map(addr, size uint64, em *Emulator) *errors.Error {
 
 func (s *WorkingSet) StoreInWorkingSet(addr uint64, mu uc.Unicorn) *errors.Error {
 	if log_mem {
-		log.WithFields(log.Fields{"addr": addr}).Debug("Store In Working Set")
+		log.WithFields(log.Fields{"addr": hex(addr)}).Debug("Store In Working Set")
 	}
 	if s.newest == -1 {
 		s.mapped[0] = addr

@@ -31,6 +31,8 @@ const ignore_invalid_instructions_after_return = true
 //accesses+1 + 0xe1f0ff5e70000
 const resolve_static_addresses = true
 
+var Panic_on_known_bugs = false
+
 type Emulator struct {
 	Trace                    *Trace
 	WorkingSet               *WorkingSet
@@ -51,8 +53,6 @@ type Config struct {
 	Arch                     arch.Arch
 	Mode                     int
 }
-
-const REG_STACK = 5
 
 func wrap(err error) *errors.Error {
 	if err != nil {
@@ -324,8 +324,8 @@ func (s *Emulator) ResetMemoryImage() *errors.Error {
 
 func (s *Emulator) ResetRegisters() *errors.Error {
 
-  for _,reg := range s.Config.Arch.GetRegisters() {
-    if err := s.mu.RegWrite(reg, 0); err != nil {
+  for i,reg := range s.Config.Arch.GetRegisters() {
+    if err := s.mu.RegWrite(reg, s.Env.GetReg(i)); err != nil {
       return wrap(err)
     }
   }
@@ -342,10 +342,10 @@ func (s *Emulator) ResetRegisters() *errors.Error {
 	if err := s.mu.RegWrite(uc.X86_REG_RCX, s.Env.GetReg(4)); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RSP, s.Env.GetReg(REG_STACK)-s.Env.GetReg(REG_STACK)%4096); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RSP, s.Env.GetReg(5)-s.Env.GetReg(5)%4096); err != nil {
 		return wrap(err)
 	}
-	if err := s.mu.RegWrite(uc.X86_REG_RBP, s.Env.GetReg(REG_STACK)-s.Env.GetReg(REG_STACK)%4096+50*8); err != nil {
+	if err := s.mu.RegWrite(uc.X86_REG_RBP, s.Env.GetReg(5)-s.Env.GetReg(5)%4096+50*8); err != nil {
 		return wrap(err)
 	}
 	if err := s.mu.RegWrite(uc.X86_REG_RSI, s.Env.GetReg(7)); err != nil {
@@ -360,8 +360,8 @@ func (s *Emulator) ResetRegisters() *errors.Error {
 }
 
 func (s *Emulator) is_in_stack_frame(addr uint64) bool {
-	is_above_initial_stack := addr <= s.Env.GetReg(REG_STACK)+ignore_stackframe_below_initial_stack_pointer_size
 	stack, _ := s.mu.RegRead(s.Config.Arch.GetRegStack())
+	is_above_initial_stack := addr <= stack+ignore_stackframe_below_initial_stack_pointer_size
 	is_below_current_stack := addr >= stack-ignore_stackframe_above_stack_pointer_size
 	return is_above_initial_stack && is_below_current_stack
 }
@@ -443,7 +443,11 @@ func hex(val uint64) string {
 
 func (s *Emulator) OnBlock(addr uint64, size uint32){
 		if size < 1 {
-			log.WithFields(log.Fields{"addr": addr, "size": size}).Debug("Empty BB")
+      if(Panic_on_known_bugs){
+        log.WithFields(log.Fields{"addr": addr, "size": size}).Fatal("Known Bug in emulator: Empty BB")
+      } else {
+        log.WithFields(log.Fields{"addr": addr, "size": size}).Error("Known Bug in emulator: Empty BB")
+      }
 			s.Trace.AddBlockRangeVisited(addr, addr)
 		}
 		s.Trace.AddBlockRangeVisited(addr, addr+uint64(size)-1)
@@ -479,7 +483,12 @@ func (s *Emulator) OnInvalidMem(access int, addr uint64, size int, value int64) 
 		rsp, _ := s.mu.RegRead(s.Config.Arch.GetRegStack())
 		rip, _ := s.mu.RegRead(s.Config.Arch.GetRegIP())
     if size <0 || size > 64 {
-      log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp)}).Fatal("Oversized Instruction")
+      if Panic_on_known_bugs {
+        log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp)}).Fatal("Known Bug in emulator: Oversized Instruction")
+      } else {
+        log.WithFields(log.Fields{"at": hex(addr), "size": size, "rax": hex(rax), "rsp": hex(rsp)}).Error("Known Bug in emulator: Oversized Instruction")
+        s.mu.Stop()
+      }
       size = 64
     }
 		mem, _ := s.mu.MemRead(rip, uint64(size))

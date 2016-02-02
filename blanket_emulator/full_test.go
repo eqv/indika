@@ -94,30 +94,28 @@ func RunRawContent(t *testing.T, offset uint64, content []byte, env Environment,
 	}
 }
 
-
-func TestOneInstruction(t *testing.T) {
-  filename := "../samples/simple/one_instr"
+func RunOnSingleBB(t* testing.T, filename string, env Environment, expected_events EventSet) {
   content :=  ReadFull(t, filename)
-  env := NewRandEnv(0)
 
 	base := uint64(0x40000)
   expected_bbs := map[uint64]ds.BB{base: *ds.NewBB(base, base+uint64(len(content)), []uint64{}) }
 
+  RunRawContent(t, base, content, env, make(map[ds.Range]*ds.MappedRegion), expected_bbs, expected_events)
+}
+
+func TestOneInstruction(t *testing.T) {
+  filename := "../samples/simple/one_instr"
+  env := NewRandEnv(0)
+
   rax := env.GetReg(1)
   mem := binary.LittleEndian.Uint64( env.GetMem(rax,8) )
   expected_events:= EventSet{ReadEvent(rax):true, ReturnEvent(mem):true}
-  RunRawContent(t, base, content, env, make(map[ds.Range]*ds.MappedRegion), expected_bbs, expected_events)
+  RunOnSingleBB(t, filename, env, expected_events)
 }
 
 func TestRun(t *testing.T) {
   filename :=  "../samples/simple/one_bb"
-  content :=  ReadFull(t, filename)
   env := NewRandEnv(0)
-
-	base := uint64(0x40000)
-  bb1 := ds.NewBB(base, base+uint64(len(content)), []uint64{})
-  expected_bbs := map[uint64]ds.BB{bb1.Rng.From: *bb1}
-
 
   rax := env.GetReg(1)
   mem1 := binary.LittleEndian.Uint64( env.GetMem(rax,8) )
@@ -125,5 +123,31 @@ func TestRun(t *testing.T) {
   mem3 := binary.LittleEndian.Uint64( env.GetMem(mem2,8) )
   rbx := env.GetReg(2)
   expected_events:= EventSet{ReadEvent(rax):true, ReadEvent(mem1):true, ReadEvent(mem2):true, WriteEvent{Addr: rbx, Value: mem3}:true, ReturnEvent(mem3):true}
-  RunRawContent(t, base,content, env, make(map[ds.Range]*ds.MappedRegion), expected_bbs, expected_events)
+  RunOnSingleBB(t, filename, env, expected_events)
+}
+
+//func TestTriggerEmptyBB(t *testing.T) {
+//  Panic_on_known_bugs = true
+//  filename := "../samples/simple/trigger_bug_empty_bb"
+//  env := NewRandEnv(0)
+//  rax := env.GetReg(1)
+//  mem := binary.LittleEndian.Uint64( env.GetMem(rax,8) )
+//  expected_events:= EventSet{ReadEvent(rax):true, ReturnEvent(mem):true}
+//  RunOnSingleBB(t, filename, env, expected_events)
+//}
+
+func TestTreeCover(t *testing.T){
+  content :=  ReadFull(t, "../samples/simple/tree_cover")
+
+	base := uint64(0x40000)
+  bb1 := *ds.NewBB(base, base+0x07, []uint64{base+0x0b, base+0x07})
+  bb2 := *ds.NewBB(base+0x07, base+0x0b, []uint64{})
+  bb3 := *ds.NewBB(base+0x0b, base+0x0f, []uint64{})
+  expected_bbs := map[uint64]ds.BB{ bb1.Rng.From: bb1, bb2.Rng.From: bb2, bb3.Rng.From: bb3 }
+
+  expected_events:= EventSet{ReturnEvent(99):true, ReturnEvent(101):true}
+
+  env := NewRandEnv(0)
+
+  RunRawContent(t, base, content, env, make(map[ds.Range]*ds.MappedRegion), expected_bbs, expected_events)
 }

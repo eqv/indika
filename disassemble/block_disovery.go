@@ -10,6 +10,7 @@ import (
 
 /* jump instructions */
 var jmp_flags = make(map[uint]bool)
+var jmp_no_return_flags = make(map[uint]bool)
 
 func init() {
 	/* set of jmp/call instructions */
@@ -35,6 +36,10 @@ func init() {
 	jmp_flags[gapstone.X86_INS_LCALL] = true
 	jmp_flags[gapstone.X86_INS_JMP] = true
 	jmp_flags[gapstone.X86_INS_LJMP] = true
+	jmp_flags[gapstone.X86_INS_RET] = true
+  jmp_no_return_flags[gapstone.X86_INS_RET] = true
+	jmp_no_return_flags[gapstone.X86_INS_JMP] = true
+	jmp_no_return_flags[gapstone.X86_INS_LJMP] = true
 }
 
 
@@ -51,8 +56,10 @@ func get_transfer_targets( ins gapstone.Instruction) []uint64 {
           res = append(res, uint64(op.Imm))
 				}
 			}
-			/* instruction succeeding a jump => basic block*/
-      res = append(res,uint64(ins.Address)+uint64(ins.Size))
+      if _,ok := jmp_no_return_flags[ins.Id]; !ok {
+			/* instruction succeeding a jump => new basic block*/
+        res = append(res,uint64(ins.Address)+uint64(ins.Size))
+      }
       return res
 }
 
