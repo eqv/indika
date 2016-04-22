@@ -184,7 +184,7 @@ func (s *Emulator) MapPageForRange(addr uint64, length uint64) *errors.Error {
 		page_end := data_end + 4096 - data_end%4096
 		page_size := page_end - page_start
 		s.mu.MemUnmap(page_start, page_size)
-		log.WithFields(log.Fields{"addr": hex(page_start), "length": page_size}).Debug("Map Memory")
+		log.WithFields(log.Fields{"addr": hex(page_start), "length": page_size}).Debug("Map Memory for range")
 		if err := s.mu.MemMapProt(page_start, page_size, uc.PROT_WRITE); err != nil {
 			return wrap(err)
 		}
@@ -239,9 +239,11 @@ func (s *Emulator) ReadMemory(addr uint64, size uint64) ([]byte, *errors.Error) 
   first_page, last_page := s.PagesFor(addr, size)
   for page := first_page ; page <= last_page; page+=pagesize {
     if err,_ := s.mu.MemRead(page, 1); err != nil {
+      log.WithFields(log.Fields{"page": hex(page), "err": err}).Debug("Need To Map Page for writing")
       s.InitPage(page)
     }
   }
+	log.WithFields(log.Fields{"addr": hex(addr), "length": size}).Debug("Read Memory Wrapper")
   mem, err := s.mu.MemRead(addr, size)
   if err!= nil {
     return nil, wrap(err)
@@ -255,6 +257,7 @@ func (s *Emulator) FullBlanket(blocks_to_visit map[uint64]ds.BB) *errors.Error {
 	s.Trace = NewTrace(&blocks_to_visit)
 	for i := 0; i < max_blocks_number; i++ {
 		bb, state := s.Trace.FirstUnseenBlock()
+
 
 		if bb == nil {
 			return nil
@@ -298,6 +301,8 @@ func (s *Emulator) handle_emulator_error(err error) *errors.Error {
 
 func (s *Emulator) RunOneTrace( addr uint64, state *State ) *errors.Error { //TODO is ^uint64(0) the right way to ignore the end?
 	cerr := s.CreateUnicorn()
+
+
 	if cerr != nil {
 		return cerr
 	}
@@ -306,7 +311,7 @@ func (s *Emulator) RunOneTrace( addr uint64, state *State ) *errors.Error { //TO
     if err != nil {return nil}
   }
 
-	log.WithFields(log.Fields{"addr": hex(addr)}).Debug("Run One Trace")
+	log.WithFields(log.Fields{"addr": hex(addr)}).Info("Run One Trace")
 	opt := uc.UcOptions{Timeout: s.Config.MaxTraceTime, Count: s.Config.MaxTraceInstructionCount}
 	err := s.mu.StartWithOptions(addr, ^uint64(0), &opt)
 	log.WithFields(log.Fields{"addr": hex(addr)}).Debug("Finished One Trace")
@@ -442,14 +447,10 @@ func hex(val uint64) string {
 }
 
 func (s *Emulator) OnBlock(addr uint64, size uint32){
-		if size < 1 {
-      if(Panic_on_known_bugs){
-        log.WithFields(log.Fields{"addr": addr, "size": size}).Fatal("Known Bug in emulator: Empty BB")
-      } else {
-        log.WithFields(log.Fields{"addr": addr, "size": size}).Error("Known Bug in emulator: Empty BB")
-      }
-			s.Trace.AddBlockRangeVisited(addr, addr)
+		if size == 0 { //size 0 means the size isn't known, underaproximate with size 1
+			size = 1
 		}
+
 		s.Trace.AddBlockRangeVisited(addr, addr+uint64(size)-1)
 		log.WithFields(log.Fields{"from": hex(addr), "to": hex(addr + uint64(size))}).Debug("BB visited")
 }

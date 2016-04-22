@@ -3,6 +3,7 @@ package blanket_emulator
 import (
 	ds "github.com/ranmrdrakono/indika/data_structures"
 	"github.com/go-errors/errors"
+//	log "github.com/Sirupsen/logrus"
 )
 
 type Trace struct {
@@ -57,8 +58,13 @@ func (s *Trace) FirstUnseenBlock() (*ds.BB, *State) {
 }
 
 func (s *Trace) DumpStateIfEndOfBB(em *Emulator, addr uint64, size uint32) *errors.Error{
+
+
   if bb,ok := s.end_addr_to_blocks[addr+uint64(size)]; ok {
-    state, err := em.DumpState()
+
+    state, err := ExtractState(em)
+    //log.WithFields(log.Fields{"addr": hex(addr+uint64(size)), "state": state, "err": err}).Info("Dump State")
+
     if err != nil {
       return err
     }
